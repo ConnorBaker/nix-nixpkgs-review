@@ -20,17 +20,17 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1759462945,
-        "narHash": "sha256-lKrUUJaTnLbpovpMy40niwT5SKE2bunuDLDmXq8Cr1c=",
-        "owner": "NixOS",
+        "lastModified": 1759644827,
+        "narHash": "sha256-EqSIfwLHH0e/6RDcF71ZfGyxQcuNHI7NBldQOU9mqIg=",
+        "owner": "ConnorBaker",
         "repo": "nixpkgs",
-        "rev": "bd56daaeb27f36258ebe82c260e6a3db5cfc175d",
+        "rev": "07198d07e7fb692191dd4fa1f284f7ceb9ba5c62",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
-        "ref": "pull/437723/merge",
+        "owner": "ConnorBaker",
         "repo": "nixpkgs",
+        "rev": "07198d07e7fb692191dd4fa1f284f7ceb9ba5c62",
         "type": "github"
       }
     },
@@ -49,10 +49,27 @@
         "type": "github"
       }
     },
+    "nixpkgs-pre": {
+      "locked": {
+        "lastModified": 1759622365,
+        "narHash": "sha256-Irbs5P5K3ftxwtcHXR/fX7RiBLXWcuad5U1oPMmxhZs=",
+        "owner": "ConnorBaker",
+        "repo": "nixpkgs",
+        "rev": "0ad7a9f5a5629b51e19d96ff5c4663b66caa4d55",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ConnorBaker",
+        "repo": "nixpkgs",
+        "rev": "0ad7a9f5a5629b51e19d96ff5c4663b66caa4d55",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "flake-parts": "flake-parts",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-pre": "nixpkgs-pre"
       }
     }
   },
