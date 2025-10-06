@@ -10,6 +10,7 @@ let
     intersectAttrs
     isAttrs
     length
+    mapAttrs
     tryEval
     ;
 
@@ -20,6 +21,8 @@ let
     showAttrPath
     zipListsWith
     ;
+
+  tryEval' = expr: (tryEval (deepSeq expr expr)).value;
 
   zipListsWith3 =
     f: fst: snd: trd:
@@ -32,7 +35,7 @@ let
 
     NOTE: Return value is designed to be the same whether evaluated directory or via `(tryEval (deepSeq ...)).value`.
   */
-  unsafeMkReport =
+  unsafeMkValueReport =
     let
       mkReport = prefix: name: drv: {
         inherit (drv)
@@ -65,10 +68,8 @@ let
     else
       false;
 
-  mkReports =
+  mkReport =
     let
-      tryEval' = expr: (tryEval (deepSeq expr expr)).value;
-
       go =
         prefix: cursor:
         let
@@ -76,7 +77,9 @@ let
           names = attrNames cursor;
           values = attrValues cursor;
           # TODO: Try to use parallel, that's why this is factored out and we're not using a let...in with zipListsWith
-          maybeReports = zipListsWith (name: value: tryEval' (unsafeMkReport prefix name value)) names values;
+          maybeReports = zipListsWith (
+            name: value: tryEval' (unsafeMkValueReport prefix name value)
+          ) names values;
         in
         mergeAttrsList (
           zipListsWith3 (
@@ -95,18 +98,39 @@ let
     in
     go [ ];
 
-  diffReports =
-    old: new:
+  mkNestedReport =
     let
-      commonNames = attrNames (intersectAttrs old new);
-      reports = {
-        added = attrNames (removeAttrs new commonNames);
-        removed = attrNames (removeAttrs old commonNames);
-        changed = filter (name: old.${name}.drvPath != new.${name}.drvPath) commonNames;
-      };
+      go =
+        prefix:
+        mapAttrs (
+          name: value:
+          let
+            maybeReport = tryEval' (unsafeMkValueReport prefix name value);
+          in
+          # Case where maybeReport is a report
+          if isAttrs maybeReport then
+            maybeReport
+          # Case where maybeReport is true, recurse
+          else if maybeReport then
+            go (prefix ++ [ name ]) value
+          # Case where maybeReport is false, ignore
+          else
+            null
+        );
     in
-    reports;
+    go [ ];
+
+  diffReports =
+    pre: post:
+    let
+      commonNames = attrNames (intersectAttrs pre post);
+    in
+    {
+      added = attrNames (removeAttrs post commonNames);
+      removed = attrNames (removeAttrs pre commonNames);
+      changed = filter (name: pre.${name}.drvPath != post.${name}.drvPath) commonNames;
+    };
 in
 {
-  inherit mkReports diffReports;
+  inherit mkReport mkNestedReport diffReports;
 }

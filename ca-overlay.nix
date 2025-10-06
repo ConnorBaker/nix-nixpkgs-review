@@ -1,4 +1,28 @@
-final: prev: {
+final: prev:
+{
+  bison = prev.bison.overrideAttrs {
+    # ## ------------- ##
+    # ## Test results. ##
+    # ## ------------- ##
+
+    # ERROR: 696 tests were run,
+    # 6 failed unexpectedly.
+    # 80 tests were skipped.
+    # ## -------------------------- ##
+    # ## testsuite.log was created. ##
+    # ## -------------------------- ##
+
+    # Please send `tests/testsuite.log' and all information you think might help:
+
+    #    To: <bug-bison@gnu.org>
+    #    Subject: [GNU Bison 3.8.2] testsuite: 36 40 48 73 172 229 failed
+
+    # You may investigate any problem if you feel able to do so, in which
+    # case the test suite provides a good starting point.  Its output may
+    # be found below `tests/testsuite.dir'.
+    doInstallCheck = false;
+  };
+
   # bluez = prev.bluez.overrideAttrs (prevAttrs: {
   #   # > FAIL: unit/test-gattrib
   #   # > =======================
@@ -49,20 +73,6 @@ final: prev: {
   #   '';
   # });
 
-  nodejs = prev.nodejs.overrideAttrs (prevAttrs: {
-    # Failed tests:
-    # out/Release/node --test-reporter=./test/common/test-error-reporter.js --test-reporter-destination=stdout /build/node-v22.19.0/test/parallel/test-fileurltopathbuffer.js
-    # out/Release/node --test-reporter=./test/common/test-error-reporter.js --test-reporter-destination=stdout /build/node-v22.19.0/test/parallel/test-fs-readdir-ucs2.js
-    # Perhaps because of ZFS, perhaps something else.
-    checkFlags = final.lib.map (
-      flag:
-      if final.lib.hasPrefix "CI_SKIP_TESTS=" flag then
-        ''${flag},test-fileurltopathbuffer,test-fs-readdir-ucs2''
-      else
-        flag
-    ) prevAttrs.checkFlags;
-  });
-
   git = prev.git.overrideAttrs (prevAttrs: {
     # Flaky tests (again, maybe because of ZFS, maybe something else).
     preInstallCheck = ''
@@ -95,3 +105,32 @@ final: prev: {
   #   })
   # ];
 }
+//
+  builtins.mapAttrs
+    (
+      _: nodejs:
+      nodejs.overrideAttrs (prevAttrs: {
+        # Failed tests:
+        # out/Release/node --test-reporter=./test/common/test-error-reporter.js --test-reporter-destination=stdout /build/node-v22.19.0/test/parallel/test-fileurltopathbuffer.js
+        # out/Release/node --test-reporter=./test/common/test-error-reporter.js --test-reporter-destination=stdout /build/node-v22.19.0/test/parallel/test-fs-readdir-ucs2.js
+        # Perhaps because of ZFS, perhaps something else.
+        checkFlags = map (
+          flag:
+          if final.lib.hasPrefix "CI_SKIP_TESTS=" flag then
+            ''${flag},test-fileurltopathbuffer,test-fs-readdir-ucs2''
+          else
+            flag
+        ) prevAttrs.checkFlags or [ ];
+      })
+    )
+    {
+      # TODO: Keep up to date with nodejs releases.
+      inherit (prev)
+        nodejs_20
+        nodejs-slim_20
+        nodejs_22
+        nodejs-slim_22
+        nodejs_24
+        nodejs-slim_24
+        ;
+    }

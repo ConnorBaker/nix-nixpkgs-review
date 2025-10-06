@@ -3,9 +3,18 @@
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
+    nix = {
+      url = "github:DeterminateSystems/nix-src";
+      inputs = {
+        nixpkgs-regression.follows = "";
+        nixpkgs-23-11.follows = "";
+      };
+    };
+
+    nixpkgs.follows = "nix/nixpkgs";
 
     nixpkgs-pre.url = "github:ConnorBaker/nixpkgs/0ad7a9f5a5629b51e19d96ff5c4663b66caa4d55";
-    nixpkgs.url = "github:ConnorBaker/nixpkgs/07198d07e7fb692191dd4fa1f284f7ceb9ba5c62";
+    nixpkgs-post.url = "github:ConnorBaker/nixpkgs/07198d07e7fb692191dd4fa1f284f7ceb9ba5c62";
   };
 
   outputs =
@@ -13,17 +22,149 @@
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
         inputs.flake-parts.flakeModules.partitions
-        ./flake-module.nix
       ];
 
       systems = [
         "aarch64-linux"
         "x86_64-linux"
-        "riscv64-linux"
-
-        "x86_64-darwin"
-        "aarch64-darwin"
       ];
+
+      transposition = {
+        packageSets.adHoc = true;
+        reports.adHoc = true;
+        diffs.adHoc = true;
+        summaries.adHoc = true;
+      };
+
+      perSystem =
+        {
+          config,
+          lib,
+          pkgs,
+          system,
+          ...
+        }:
+        let
+          inherit (lib) optionalString;
+          configurations = {
+            when = [
+              "pre"
+              "post"
+            ];
+            withCA = [
+              false
+              true
+            ];
+            withCUDA = [
+              false
+              true
+            ];
+          };
+
+          mkName =
+            {
+              when,
+              withCA,
+              withCUDA,
+            }:
+            "pkgs" + optionalString withCA "-ca" + optionalString withCUDA "-cuda" + "-${when}";
+        in
+        {
+          apps = lib.mapAttrs (
+            _: summary:
+            let
+              script = pkgs.writeScriptBin ("review-" + lib.removePrefix "summary-" summary.name) ''
+                ${lib.getExe pkgs.jq} -r '(.diff.added + .diff.changed)[] as $name | .post[$name].drvPath + "^*"' < ${summary} | \
+                nix build --keep-going --stdin
+              '';
+            in
+            {
+              program = lib.getExe script;
+            }
+          ) config.summaries;
+
+          # To be used for introspection only; these are instantiated within a derivation, so
+          # don't use or instantiate these because they'll hang around instead of being GC'd.
+          packageSets = lib.listToAttrs (
+            lib.mapCartesianProduct (
+              {
+                when,
+                withCA,
+                withCUDA,
+              }@cfg:
+              {
+                name = mkName cfg;
+                value = import inputs."nixpkgs-${when}" {
+                  inherit system;
+                  config = import ./mkConfig.nix withCUDA;
+                  overlays = lib.optionals withCA [ (import ./ca-overlay.nix) ];
+                };
+              }
+            ) configurations
+          );
+
+          reports =
+            let
+              nix = inputs.nix.packages.${system}.default;
+            in
+            lib.listToAttrs (
+              lib.mapCartesianProduct (
+                {
+                  when,
+                  withCA,
+                  withCUDA,
+                }@cfg:
+                let
+                  name = mkName cfg;
+                in
+                {
+                  inherit name;
+                  value = pkgs.callPackage ./mkReport.nix {
+                    name = "report-${name}";
+                    nixpkgs = inputs."nixpkgs-${when}";
+                    inherit nix withCA withCUDA;
+                  };
+                }
+              ) configurations
+            );
+
+          diffs =
+            let
+              reportNames = lib.attrNames config.reports;
+            in
+            lib.listToAttrs (
+              # It doesn't make sense to compare with and without CA derivations.
+              lib.filter ({ value, ... }: value.reportPre.withCA == value.reportPost.withCA) (
+                lib.mapCartesianProduct
+                  (
+                    { reportPreName, reportPostName }:
+                    let
+                      name = reportPreName + "-" + reportPostName;
+                    in
+                    {
+                      inherit name;
+                      value = pkgs.callPackage ./mkDiff.nix {
+                        name = "diff-${name}";
+                        reportPre = config.reports.${reportPreName};
+                        reportPost = config.reports.${reportPostName};
+                      };
+                    }
+                  )
+                  {
+                    reportPreName = reportNames;
+                    reportPostName = reportNames;
+                  }
+              )
+            );
+
+          summaries = lib.mapAttrs (
+            _: diff:
+            pkgs.callPackage ./mkSummary.nix {
+              name = "summary-" + lib.removePrefix "diff-" diff.name;
+              inherit diff;
+            }
+          ) config.diffs;
+        };
 
       partitionedAttrs = {
         checks = "dev";
