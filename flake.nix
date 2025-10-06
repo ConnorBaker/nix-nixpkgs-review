@@ -70,17 +70,40 @@
             "pkgs" + optionalString withCA "-ca" + optionalString withCUDA "-cuda" + "-${when}";
         in
         {
-          apps = lib.mapAttrs (
-            _: summary:
+          # NOTE: Building the reports is super IO heavy due to all the drv creation; make sure build-dir is backed by TMPFS:
+          # nix build -L .#review-pkgs-pre-pkgs-post --build-dir /run/temp-ramdisk --builders ''
+          # TODO: switch to using tmpfs-backed build dir for builders.
+          packages = lib.mapAttrs' (
+            name: summary:
             let
-              script = pkgs.writeScriptBin ("review-" + lib.removePrefix "summary-" summary.name) ''
-                ${lib.getExe pkgs.jq} -r '(.diff.added + .diff.changed)[] as $name | .post[$name].drvPath + "^*"' < ${summary} | \
-                nix build --keep-going --stdin
-              '';
+              inherit (summary.diff) reportPre reportPost;
+              name' = "review-${name}";
             in
             {
-              program = lib.getExe script;
+              name = name';
+              # NOTE: Must use the read-only-local-store feature because the store is... well, read-only and inside a Nix store path.
+              value = pkgs.writeShellScriptBin name' ''
+                echo "copying derivations from ${reportPre.name}"
+                nix copy \
+                  --extra-experimental-features read-only-local-store \
+                  --all \
+                  --from "${reportPre.evalStore.outPath}?read-only=true"
+
+                echo "copying derivations from ${reportPost.name}"
+                nix copy \
+                  --extra-experimental-features read-only-local-store \
+                  --all \
+                  --from "${reportPost.evalStore.outPath}?read-only=true"
+
+                echo "building added and changed derivations"
+                ${lib.getExe pkgs.jq} \
+                  --raw-output \
+                  '(.diff.added + .diff.changed)[] as $name | .post[$name].drvPath + "^*"' \
+                  < ${summary} | \
+                nix build --keep-going --stdin
+              '';
             }
+
           ) config.summaries;
 
           # To be used for introspection only; these are instantiated within a derivation, so

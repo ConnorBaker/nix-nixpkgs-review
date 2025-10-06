@@ -1,11 +1,11 @@
-withCUDA:
+{ withCA, withCUDA }:
 {
   # NOTE: Nixpkgs allows aliases by default which prints a bunch of evaluation warnings.
   allowAliases = false;
   allowBroken = false;
   allowUnfree = false;
   checkMeta = true;
-  contentAddressedByDefault = true;
+  contentAddressedByDefault = withCA;
   packageOverrides = pkgs: {
     # TODO: Something about the parallel evaluator dies when it has to process
     # tests.trivial-builders.writeStringReferencesToFile:

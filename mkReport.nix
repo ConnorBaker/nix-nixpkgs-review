@@ -6,19 +6,23 @@
   withCUDA,
 
   # callPackage arguments
+  jq,
   lib,
   nix,
   runCommandNoCC,
   stdenv,
-  time,
 }:
 runCommandNoCC name
   {
     __structuredAttr = true;
     strictDeps = true;
+    outputs = [
+      "out"
+      "evalStore"
+    ];
 
     nativeBuildInputs = [
-      time
+      jq
       nix
     ];
 
@@ -27,36 +31,42 @@ runCommandNoCC name
     };
   }
   # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo
-  # error: operation 'addToStore' is not supported by store 'dummy://'
-  # nixpkgs = builtins.getFlake "path://${nixpkgs.outPath}?narHash=${nixpkgs.narHash}";
-  # booooo, impure is required or else we have to use builtins.getFlake and pass in the narHash so it's locked
-  # and then that copies it to the local store.
-  # TODO: Maybe I should do eval in the ramdisk? So fetch everything using pure mode and builtins.getFlake?
   # FIXME: As my linux builders are configured, /tmp is backed by ZFS.
-  # TODO: Soooo much IO.
-  # TODO: Lazy trees doesn't help at all.
+  # TODO: Soooo much IO. Like 1.5GB evalStore output.
+  # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
+  # to a temporary store.
   ''
-    ${lib.getExe time} -v nix eval \
+    nixLog "running eval"
+    nix eval \
       --show-trace \
       --verbose \
+      --offline \
       --store dummy:// \
-      --eval-store "$TMPDIR" \
+      --eval-store "$evalStore" \
       --json \
       --impure \
+      --no-eval-cache \
+      --no-allow-import-from-derivation \
+      --no-fsync-metadata \
       --lazy-trees \
       --extra-experimental-features ca-derivations \
       --extra-experimental-features parallel-eval \
       --eval-cores 0 \
       --expr \
-      '
-      let
-        pkgs = import ${nixpkgs.outPath} {
-          system = "${stdenv.buildPlatform.system}";
-          config = import ${./mkConfig.nix} ${builtins.toJSON withCUDA};
-          overlays = [ ${lib.optionalString withCA "(import ${./ca-overlay.nix})"} ];
-        };
-        inherit (import ${./lib.nix} { inherit (pkgs) lib; }) mkReport;
-      in
-      mkReport pkgs
-      ' > $out
+        '
+        let
+          pkgs = import ${nixpkgs.outPath} {
+            system = "${stdenv.buildPlatform.system}";
+            config = import ${./mkConfig.nix} {
+              withCA = ${builtins.toJSON withCA};
+              withCUDA = ${builtins.toJSON withCUDA};
+            };
+            overlays = [ ${lib.optionalString withCA "(import ${./ca-overlay.nix})"} ];
+          };
+          inherit (import ${./lib.nix} { inherit (pkgs) lib; }) mkNestedReport;
+        in
+        mkNestedReport pkgs
+        ' | \
+    jq --compact-output '[.. | select(.drvPath?) | {(.attrPath | join(".")): .}] | add' > "$out"
+    nixLog "done!"
   ''
