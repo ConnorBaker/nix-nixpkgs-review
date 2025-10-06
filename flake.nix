@@ -82,25 +82,19 @@
             {
               name = name';
               # NOTE: Must use the read-only-local-store feature because the store is... well, read-only and inside a Nix store path.
+              # This is an experimental feature and it must be enabled.
               value = pkgs.writeShellScriptBin name' ''
-                echo "copying derivations from ${reportPre.name}"
-                nix copy \
-                  --extra-experimental-features read-only-local-store \
-                  --all \
-                  --from "${reportPre.evalStore.outPath}?read-only=true"
-
-                echo "copying derivations from ${reportPost.name}"
-                nix copy \
-                  --extra-experimental-features read-only-local-store \
-                  --all \
-                  --from "${reportPost.evalStore.outPath}?read-only=true"
-
                 echo "building added and changed derivations"
                 ${lib.getExe pkgs.jq} \
                   --raw-output \
                   '(.diff.added + .diff.changed)[] as $name | .post[$name].drvPath + "^*"' \
                   < ${summary} | \
-                nix build --keep-going --no-link --stdin
+                nix build \
+                  --extra-substituters "${reportPre.evalStore.outPath}?read-only=true" \
+                  --extra-substituters "${reportPost.evalStore.outPath}?read-only=true" \
+                  --keep-going \
+                  --no-link \
+                  --stdin
               '';
             }
 
