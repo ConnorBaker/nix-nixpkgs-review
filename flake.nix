@@ -100,7 +100,7 @@
                   --raw-output \
                   '(.diff.added + .diff.changed)[] as $name | .post[$name].drvPath + "^*"' \
                   < ${summary} | \
-                nix build --keep-going --stdin
+                nix build --keep-going --no-link --stdin
               '';
             }
 
