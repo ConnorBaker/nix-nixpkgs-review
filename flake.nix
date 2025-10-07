@@ -78,6 +78,14 @@
               name = name';
               # NOTE: These scripts won't capture being run with --override-input since it doesn't change the committed lockfile.
               value = pkgs.writeShellScriptBin name' ''
+                echo "added derivations: $(${lib.getExe pkgs.jq} < ${diff} '.added | length')"
+                ${lib.getExe pkgs.jq} --raw-output '.added | sort[]' < ${diff}
+                echo
+
+                echo "changed derivations: $(${lib.getExe pkgs.jq} < ${diff} '.changed | length')"
+                ${lib.getExe pkgs.jq} --raw-output '.changed | sort[]' < ${diff}
+                echo
+
                 echo "building added and changed derivations"
                 ${lib.getExe pkgs.jq} \
                   --raw-output \

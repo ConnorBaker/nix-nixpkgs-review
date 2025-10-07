@@ -6,11 +6,13 @@
   withCUDA,
 
   # callPackage arguments
+  pkgsBuildHost,
   jq,
   lib,
   nix,
   runCommandNoCC,
   stdenv,
+  time,
 }:
 runCommandNoCC name
   {
@@ -20,6 +22,7 @@ runCommandNoCC name
     nativeBuildInputs = [
       jq
       nix
+      time
     ];
 
     passthru = {
@@ -31,7 +34,7 @@ runCommandNoCC name
   # to a temporary store.
   ''
     nixLog "running eval"
-    nix eval \
+    ${lib.getExe pkgsBuildHost.time} -v nix eval \
       --show-trace \
       --verbose \
       --offline \
@@ -62,5 +65,6 @@ runCommandNoCC name
         mkNestedReport pkgs
         ' | \
     jq --compact-output '[.. | select(.drvPath?) | {(.attrPath | join(".")): .}] | add' > "$out"
-    nixLog "done!"
+
+    nixLog "computed $(jq 'length' < "$out") derivations"
   ''
