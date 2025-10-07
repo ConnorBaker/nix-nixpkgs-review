@@ -13,8 +13,8 @@
 
     nixpkgs.follows = "nix/nixpkgs";
 
-    nixpkgs-pre.url = "github:ConnorBaker/nixpkgs/0ad7a9f5a5629b51e19d96ff5c4663b66caa4d55";
-    nixpkgs-post.url = "github:ConnorBaker/nixpkgs/07198d07e7fb692191dd4fa1f284f7ceb9ba5c62";
+    nixpkgs-pre.url = "github:ConnorBaker/nixpkgs/ea839424d592075b11eadde501fd43f843b1664e";
+    nixpkgs-post.url = "github:ConnorBaker/nixpkgs/2095912bf49e7447e3e91d2dbdce48909437e19d";
   };
 
   outputs =
@@ -68,9 +68,6 @@
             "pkgs" + lib.optionalString withCA "-ca" + lib.optionalString withCUDA "-cuda" + "-${when}";
         in
         {
-          # NOTE: Building the reports is super IO heavy due to all the drv creation; make sure build-dir is backed by TMPFS:
-          # nix build -L .#review-pkgs-pre-pkgs-post --build-dir /run/temp-ramdisk --builders ''
-          # TODO: switch to using tmpfs-backed build dir for builders.
           packages = lib.mapAttrs' (
             name: diff:
             let
@@ -79,6 +76,7 @@
             in
             {
               name = name';
+              # NOTE: These scripts won't capture being run with --override-input since it doesn't change the committed lockfile.
               value = pkgs.writeShellScriptBin name' ''
                 echo "building added and changed derivations"
                 ${lib.getExe pkgs.jq} \

@@ -131,33 +131,33 @@
     },
     "nixpkgs-post": {
       "locked": {
-        "lastModified": 1759644827,
-        "narHash": "sha256-EqSIfwLHH0e/6RDcF71ZfGyxQcuNHI7NBldQOU9mqIg=",
+        "lastModified": 1759809924,
+        "narHash": "sha256-WWsw0AmcB4P9W4iw90E74p5zN0PMruOCxABdF5n+LbU=",
         "owner": "ConnorBaker",
         "repo": "nixpkgs",
-        "rev": "07198d07e7fb692191dd4fa1f284f7ceb9ba5c62",
+        "rev": "2095912bf49e7447e3e91d2dbdce48909437e19d",
         "type": "github"
       },
       "original": {
         "owner": "ConnorBaker",
         "repo": "nixpkgs",
-        "rev": "07198d07e7fb692191dd4fa1f284f7ceb9ba5c62",
+        "rev": "2095912bf49e7447e3e91d2dbdce48909437e19d",
         "type": "github"
       }
     },
     "nixpkgs-pre": {
       "locked": {
-        "lastModified": 1759622365,
-        "narHash": "sha256-Irbs5P5K3ftxwtcHXR/fX7RiBLXWcuad5U1oPMmxhZs=",
+        "lastModified": 1759806606,
+        "narHash": "sha256-cJLM3+dwqFuHZwEIyFHbmvmB1+E2nEXKvwojvY0dSQc=",
         "owner": "ConnorBaker",
         "repo": "nixpkgs",
-        "rev": "0ad7a9f5a5629b51e19d96ff5c4663b66caa4d55",
+        "rev": "ea839424d592075b11eadde501fd43f843b1664e",
         "type": "github"
       },
       "original": {
         "owner": "ConnorBaker",
         "repo": "nixpkgs",
-        "rev": "0ad7a9f5a5629b51e19d96ff5c4663b66caa4d55",
+        "rev": "ea839424d592075b11eadde501fd43f843b1664e",
         "type": "github"
       }
     },
