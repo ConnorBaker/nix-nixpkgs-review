@@ -33,7 +33,6 @@
         packageSets.adHoc = true;
         reports.adHoc = true;
         diffs.adHoc = true;
-        summaries.adHoc = true;
       };
 
       perSystem =
@@ -45,7 +44,6 @@
           ...
         }:
         let
-          inherit (lib) optionalString;
           configurations = {
             when = [
               "pre"
@@ -67,38 +65,33 @@
               withCA,
               withCUDA,
             }:
-            "pkgs" + optionalString withCA "-ca" + optionalString withCUDA "-cuda" + "-${when}";
+            "pkgs" + lib.optionalString withCA "-ca" + lib.optionalString withCUDA "-cuda" + "-${when}";
         in
         {
           # NOTE: Building the reports is super IO heavy due to all the drv creation; make sure build-dir is backed by TMPFS:
           # nix build -L .#review-pkgs-pre-pkgs-post --build-dir /run/temp-ramdisk --builders ''
           # TODO: switch to using tmpfs-backed build dir for builders.
           packages = lib.mapAttrs' (
-            name: summary:
+            name: diff:
             let
-              inherit (summary.diff) reportPre reportPost;
               name' = "review-${name}";
+              packageSetPrefix = ".#packageSets.${system}.${lib.removePrefix "report-" diff.reportPost.name}.";
             in
             {
               name = name';
-              # NOTE: Must use the read-only-local-store feature because the store is... well, read-only and inside a Nix store path.
-              # This is an experimental feature and it must be enabled.
               value = pkgs.writeShellScriptBin name' ''
                 echo "building added and changed derivations"
                 ${lib.getExe pkgs.jq} \
                   --raw-output \
-                  '(.diff.added + .diff.changed)[] as $name | .post[$name].drvPath + "^*"' \
-                  < ${summary} | \
+                  '(.added + .changed) | sort[] | "${packageSetPrefix}" + . ' \
+                  < ${diff} | \
                 nix build \
-                  --extra-substituters "${reportPre.evalStore.outPath}?read-only=true" \
-                  --extra-substituters "${reportPost.evalStore.outPath}?read-only=true" \
                   --keep-going \
                   --no-link \
                   --stdin
               '';
             }
-
-          ) config.summaries;
+          ) config.diffs;
 
           # To be used for introspection only; these are instantiated within a derivation, so
           # don't use or instantiate these because they'll hang around instead of being GC'd.
@@ -113,7 +106,7 @@
                 name = mkName cfg;
                 value = import inputs."nixpkgs-${when}" {
                   inherit system;
-                  config = import ./mkConfig.nix withCUDA;
+                  config = import ./mkConfig.nix { inherit withCA withCUDA; };
                   overlays = lib.optionals withCA [ (import ./ca-overlay.nix) ];
                 };
               }
@@ -173,14 +166,6 @@
                   }
               )
             );
-
-          summaries = lib.mapAttrs (
-            _: diff:
-            pkgs.callPackage ./mkSummary.nix {
-              name = "summary-" + lib.removePrefix "diff-" diff.name;
-              inherit diff;
-            }
-          ) config.diffs;
         };
 
       partitionedAttrs = {

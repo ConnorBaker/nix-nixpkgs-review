@@ -16,10 +16,6 @@ runCommandNoCC name
   {
     __structuredAttr = true;
     strictDeps = true;
-    outputs = [
-      "out"
-      "evalStore"
-    ];
 
     nativeBuildInputs = [
       jq
@@ -31,8 +27,6 @@ runCommandNoCC name
     };
   }
   # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo
-  # FIXME: As my linux builders are configured, /tmp is backed by ZFS.
-  # TODO: Soooo much IO. Like 1.5GB evalStore output.
   # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
   # to a temporary store.
   ''
@@ -42,7 +36,7 @@ runCommandNoCC name
       --verbose \
       --offline \
       --store dummy:// \
-      --eval-store "$evalStore" \
+      --read-only \
       --json \
       --impure \
       --no-eval-cache \
