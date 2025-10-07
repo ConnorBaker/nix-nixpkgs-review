@@ -72,11 +72,21 @@
             name: diff:
             let
               name' = "review-${name}";
-              packageSetPrefix = ".#packageSets.${system}.${lib.removePrefix "report-" diff.reportPost.name}.";
+              flakeRef = "${inputs.self.outPath}?narHash=${inputs.self.narHash}";
+              packageSetAttrPath = "packageSets.${system}.${lib.removePrefix "report-" diff.reportPost.name}";
             in
             {
               name = name';
               # NOTE: These scripts won't capture being run with --override-input since it doesn't change the committed lockfile.
+              # TODO: What if we forwarded all arguments the script received and used them to build diff and everything else
+              # with those arguments?
+              # Ideally having the reference through inputs.self.outPath and inputs.self.narHash would be enough if, when
+              # --override-input is used, a new store path entry with a new flake lockfile is created; if that's not the case,
+              # need to think of something else.
+              # Unfortunately, that doesn't seem to be the case.
+              # Consider the case where we do forward the arguments and do override-input in the script --
+              # what if the inputs are unlocked? If evaluation of the diff takes long enough, by the time
+              # we're running `nix build`, the unlocked inputs could have changed and been fetched again.
               value = pkgs.writeShellScriptBin name' ''
                 echo "added derivations: $(${lib.getExe pkgs.jq} < ${diff} '.added | length')"
                 ${lib.getExe pkgs.jq} --raw-output '.added | sort[]' < ${diff}
@@ -89,7 +99,7 @@
                 echo "building added and changed derivations"
                 ${lib.getExe pkgs.jq} \
                   --raw-output \
-                  '(.added + .changed) | sort[] | "${packageSetPrefix}" + . ' \
+                  '(.added + .changed) | sort[] | "${flakeRef}#${packageSetAttrPath}." + . ' \
                   < ${diff} | \
                 nix build \
                   --keep-going \
