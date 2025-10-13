@@ -81,6 +81,7 @@ final: prev:
     + prevAttrs.preInstallCheck
     + ''
       disable_test t0050-filesystem
+      disable_test t4104-apply-boundary
       disable_test t7513-interpret-trailers
     '';
   });
@@ -91,19 +92,66 @@ final: prev:
     doCheck = false;
   };
 
-  # pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-  #   (_: prev: {
-  #     pycairo = prev.pycairo.overrideAttrs (old: {
-  #       # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
-  #       disabledTests = [
-  #         "test_fspaths"
-  #       ];
-  #     });
+  pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+    (_: prev: {
+      fs = prev.fs.overrideAttrs (prevAttrs: {
+        # FAILED tests/test_encoding.py::TestEncoding::test_listdir - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
+        # FAILED tests/test_encoding.py::TestEncoding::test_open - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
+        # FAILED tests/test_encoding.py::TestEncoding::test_scandir - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
+        disabledTestPaths = prevAttrs.disabledTestPaths ++ [
+          "tests/test_encoding.py::TestEncoding::test_listdir"
+          "tests/test_encoding.py::TestEncoding::test_open"
+          "tests/test_encoding.py::TestEncoding::test_scandir"
+        ];
+      });
 
-  #     # TODO: PyTest xdist failure?
-  #     # FAILED testing/acceptance_test.py::TestLoadScope::test_workqueue_ordered_by_input - AssertionError: assert {'gw1': 10} == {'gw0': 10}
-  #   })
-  # ];
+      # pycairo = prev.pycairo.overrideAttrs (old: {
+      #   # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
+      #   disabledTests = [
+      #     "test_fspaths"
+      #   ];
+      # });
+
+      # TODO: PyTest xdist failure?
+      # FAILED testing/acceptance_test.py::TestLoadScope::test_workqueue_ordered_by_input - AssertionError: assert {'gw1': 10} == {'gw0': 10}
+
+      watchdog = prev.watchdog.overrideAttrs (prevAttrs: {
+        # FAILED tests/test_inotify_c.py::test_select_fd - OSError: [Errno 24] Too many open files: '/build/pytest-of-nixbld/pytest-0/test_select_fd0/new_file'
+        disabledTestPaths = prevAttrs.disabledTestPaths ++ [
+          "tests/test_inotify_c.py::test_select_fd"
+        ];
+      });
+    })
+  ];
+
+  wget = prev.wget.overrideAttrs (prevAttrs: {
+    # FAIL: Test-iri-list.px
+    # FAIL: Test-ftp-iri-fallback.px
+    # FAIL: Test-ftp-iri.px
+    # FAIL: Test-ftp-iri-disabled.px
+    # FAIL: Test-ftp-iri-recursive.px
+    # FAIL: Test-iri-disabled.px
+    # FAIL: Test-iri-list.px
+    # These seem related to ZFS: "Invalid or incomplete multibyte or wide character"
+    # These are already disabled on Darwin.
+    # https://github.com/NixOS/nixpkgs/blob/7e297ddff44a3cc93673bb38d0374df8d0ad73e4/pkgs/by-name/wg/wget/package.nix#L89-L102
+    preCheck =
+      prevAttrs.preCheck
+      + final.lib.optionalString (!final.stdenv.hostPlatform.isDarwin) ''
+        # depending on the underlying filesystem, some tests
+        # creating exotic file names fail
+        for f in tests/Test-ftp-iri.px \
+          tests/Test-ftp-iri-fallback.px \
+          tests/Test-ftp-iri-recursive.px \
+          tests/Test-ftp-iri-disabled.px \
+          tests/Test-iri-disabled.px \
+          tests/Test-iri-list.px ;
+        do
+          # just return magic "skip" exit code 77
+          sed -i 's/^exit/exit 77 #/' $f
+        done
+      '';
+  });
 }
 //
   builtins.mapAttrs
