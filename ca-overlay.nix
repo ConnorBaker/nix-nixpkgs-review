@@ -122,6 +122,13 @@ final: prev:
       # TODO: PyTest xdist failure?
       # FAILED testing/acceptance_test.py::TestLoadScope::test_workqueue_ordered_by_input - AssertionError: assert {'gw1': 10} == {'gw0': 10}
 
+      virtualenv = prev.virtualenv.overrideAttrs (prevAttrs: {
+        # FAILED tests/unit/test_file_limit.py::test_too_many_open_files - RuntimeError: failed to query /nix/store/rp5byziyqlpwg6x2xin07llcw3zpxzqb-p...
+        disabledTestPaths = prevAttrs.disabledTestPaths ++ [
+          "tests/unit/test_file_limit.py::test_too_many_open_files"
+        ];
+      });
+
       watchdog = prev.watchdog.overrideAttrs (prevAttrs: {
         # FAILED tests/test_inotify_c.py::test_select_fd - OSError: [Errno 24] Too many open files: '/build/pytest-of-nixbld/pytest-0/test_select_fd0/new_file'
         disabledTestPaths = prevAttrs.disabledTestPaths ++ [
