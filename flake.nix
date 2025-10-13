@@ -13,8 +13,8 @@
 
     nixpkgs.follows = "nix/nixpkgs";
 
-    nixpkgs-pre.url = "github:ConnorBaker/nixpkgs/ea839424d592075b11eadde501fd43f843b1664e";
-    nixpkgs-post.url = "github:ConnorBaker/nixpkgs/2095912bf49e7447e3e91d2dbdce48909437e19d";
+    nixpkgs-pre.url = "github:NixOS/nixpkgs/16a0bed90bd882834bf3fc1dea26ed22b67b962f";
+    nixpkgs-post.url = "github:NixOS/nixpkgs/pull/437723/merge";
   };
 
   outputs =
