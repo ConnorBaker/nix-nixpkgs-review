@@ -73,18 +73,7 @@ final: prev:
   #   '';
   # });
 
-  git = prev.git.overrideAttrs (prevAttrs: {
-    # Flaky tests (again, maybe because of ZFS, maybe something else).
-    preInstallCheck = ''
-      NIX_BUILD_CORES=4
-    ''
-    + prevAttrs.preInstallCheck
-    + ''
-      disable_test t0050-filesystem
-      disable_test t4104-apply-boundary
-      disable_test t7513-interpret-trailers
-    '';
-  });
+  git = prev.git.override { doInstallCheck = false; };
 
   gnutls = prev.gnutls.overrideAttrs {
     # Gets hung after:
@@ -94,6 +83,17 @@ final: prev:
 
   pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
     (_: prev: {
+      filelock = prev.filelock.overrideAttrs (prevAttrs: {
+        # FAILED tests/test_filelock.py::test_threaded_shared_lock_obj[UnixFileLock] - RuntimeError: can't start new thread
+        # FAILED tests/test_filelock.py::test_threaded_shared_lock_obj[SoftFileLock] - RuntimeError: can't start new thread
+        # FAILED tests/test_filelock.py::test_threaded_lock_different_lock_obj[UnixFileLock] - RuntimeError: can't start new thread
+        # FAILED tests/test_filelock.py::test_threaded_lock_different_lock_obj[SoftFileLock] - RuntimeError: can't start new thread
+        disabledTestPaths = prevAttrs.disabledTestPaths ++ [
+          "tests/test_filelock.py::test_threaded_shared_lock_obj"
+          "tests/test_filelock.py::test_threaded_lock_different_lock_obj"
+        ];
+      });
+
       fs = prev.fs.overrideAttrs (prevAttrs: {
         # FAILED tests/test_encoding.py::TestEncoding::test_listdir - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
         # FAILED tests/test_encoding.py::TestEncoding::test_open - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
