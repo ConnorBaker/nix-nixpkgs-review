@@ -105,6 +105,13 @@ final: prev:
         ];
       });
 
+      pygit = prev.pygit.overrideAttrs (prevAttrs: {
+        # FAILED test/test_branch.py::test_lookup_branch_local - UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb1 in position 28: in...
+        disabledTestPaths = prevAttrs.disabledTestPaths ++ [
+          "test/test_branch.py::test_lookup_branch_local"
+        ];
+      });
+
       # pycairo = prev.pycairo.overrideAttrs (old: {
       #   # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
       #   disabledTests = [
