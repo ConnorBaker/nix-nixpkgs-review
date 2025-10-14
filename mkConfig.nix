@@ -13,11 +13,9 @@
     # TODO: Something about the parallel evaluator dies when it has to process
     # tests.trivial-builders.writeStringReferencesToFile:
     # error: path '/nix/store/38gk6xb0lbyyckqs5lmdmrfdzcsw6mgg-hi.drv' does not exist and cannot be created
-    tests = pkgs.tests // {
-      trivial-builders = pkgs.tests.trivial-builders // {
-        writeStringReferencesToFile = null;
-      };
-    };
+    # TODO: `tests.pkg-config` creates insane derivations (tries to build cuda_compat on x86_64-linux) because it
+    # sets `allowUnsupportedSystem`.
+    tests = { };
   };
 }
 // (
