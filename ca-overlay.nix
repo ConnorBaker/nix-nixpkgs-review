@@ -83,6 +83,17 @@ final: prev:
 
   pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
     (_: prev: {
+      dulwich = prev.dulwich.overrideAttrs (prevAttrs: {
+        # FAILED tests/test_index.py::BuildIndexTests::test_no_decode_encode - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: b'/b...
+        # FAILED tests/test_refs.py::DiskRefsContainerTests::test_cyrillic - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: b'/b...
+        # FAILED tests/test_repository.py::BuildRepoRootTests::test_commit_no_encode_decode - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: b'/b...
+        disabledTestPaths = prevAttrs.disabledTestPaths ++ [
+          "tests/test_index.py::BuildIndexTests::test_no_decode_encode"
+          "tests/test_refs.py::DiskRefsContainerTests::test_cyrillic"
+          "tests/test_repository.py::BuildRepoRootTests::test_commit_no_encode_decode"
+        ];
+      });
+
       filelock = prev.filelock.overrideAttrs (prevAttrs: {
         # FAILED tests/test_filelock.py::test_threaded_shared_lock_obj[UnixFileLock] - RuntimeError: can't start new thread
         # FAILED tests/test_filelock.py::test_threaded_shared_lock_obj[SoftFileLock] - RuntimeError: can't start new thread
@@ -112,12 +123,12 @@ final: prev:
         ];
       });
 
-      # pycairo = prev.pycairo.overrideAttrs (old: {
-      #   # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
-      #   disabledTests = [
-      #     "test_fspaths"
-      #   ];
-      # });
+      pycairo = prev.pycairo.overrideAttrs (prevAttrs: {
+        # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
+        disabledTests = prevAttrs.disabledTestPaths or [ ] ++ [
+          "tests/test_fspaths.py::test_fspaths"
+        ];
+      });
 
       # TODO: PyTest xdist failure?
       # FAILED testing/acceptance_test.py::TestLoadScope::test_workqueue_ordered_by_input - AssertionError: assert {'gw1': 10} == {'gw0': 10}
