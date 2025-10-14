@@ -125,7 +125,7 @@ final: prev:
 
       pycairo = prev.pycairo.overrideAttrs (prevAttrs: {
         # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
-        disabledTests = prevAttrs.disabledTestPaths or [ ] ++ [
+        disabledTestPaths = prevAttrs.disabledTestPaths or [ ] ++ [
           "tests/test_fspaths.py::test_fspaths"
         ];
       });
