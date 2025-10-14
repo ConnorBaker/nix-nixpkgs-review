@@ -73,8 +73,6 @@ final: prev:
   #   '';
   # });
 
-  git = prev.git.override { doInstallCheck = false; };
-
   gnutls = prev.gnutls.overrideAttrs {
     # Gets hung after:
     # PASS: dtls/dtls.sh
