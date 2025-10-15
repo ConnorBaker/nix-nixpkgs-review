@@ -73,6 +73,19 @@ final: prev:
   #   '';
   # });
 
+  git = prev.git.overrideAttrs (prevAttrs: {
+    # Flaky tests (again, maybe because of ZFS, maybe something else).
+    preInstallCheck = ''
+      NIX_BUILD_CORES=4
+    ''
+    + prevAttrs.preInstallCheck
+    + ''
+      disable_test t0050-filesystem
+      disable_test t4104-apply-boundary
+      disable_test t7513-interpret-trailers
+    '';
+  });
+
   gnutls = prev.gnutls.overrideAttrs {
     # Gets hung after:
     # PASS: dtls/dtls.sh

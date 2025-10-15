@@ -7,9 +7,6 @@
   checkMeta = true;
   contentAddressedByDefault = withCA;
   packageOverrides = pkgs: {
-    # Something about bootstrapping requires that we do this here rather than in ca-overlay.nix.
-    ${if withCA then "git" else null} = pkgs.git.override { doInstallCheck = false; };
-
     # TODO: Something about the parallel evaluator dies when it has to process
     # tests.trivial-builders.writeStringReferencesToFile:
     # error: path '/nix/store/38gk6xb0lbyyckqs5lmdmrfdzcsw6mgg-hi.drv' does not exist and cannot be created
