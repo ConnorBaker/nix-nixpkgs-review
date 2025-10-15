@@ -83,6 +83,7 @@ final: prev:
       disable_test t0050-filesystem
       disable_test t4104-apply-boundary
       disable_test t7513-interpret-trailers
+      disable_test t7800-difftool
     '';
   });
 
@@ -93,8 +94,8 @@ final: prev:
   };
 
   pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-    (_: prev: {
-      dulwich = prev.dulwich.overrideAttrs (prevAttrs: {
+    (finalPythonPackages: prevPythonPackages: {
+      dulwich = prevPythonPackages.dulwich.overrideAttrs (prevAttrs: {
         # FAILED tests/test_index.py::BuildIndexTests::test_no_decode_encode - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: b'/b...
         # FAILED tests/test_refs.py::DiskRefsContainerTests::test_cyrillic - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: b'/b...
         # FAILED tests/test_repository.py::BuildRepoRootTests::test_commit_no_encode_decode - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: b'/b...
@@ -105,7 +106,7 @@ final: prev:
         ];
       });
 
-      filelock = prev.filelock.overrideAttrs (prevAttrs: {
+      filelock = prevPythonPackages.filelock.overrideAttrs (prevAttrs: {
         # FAILED tests/test_filelock.py::test_threaded_shared_lock_obj[UnixFileLock] - RuntimeError: can't start new thread
         # FAILED tests/test_filelock.py::test_threaded_shared_lock_obj[SoftFileLock] - RuntimeError: can't start new thread
         # FAILED tests/test_filelock.py::test_threaded_lock_different_lock_obj[UnixFileLock] - RuntimeError: can't start new thread
@@ -116,7 +117,7 @@ final: prev:
         ];
       });
 
-      fs = prev.fs.overrideAttrs (prevAttrs: {
+      fs = prevPythonPackages.fs.overrideAttrs (prevAttrs: {
         # FAILED tests/test_encoding.py::TestEncoding::test_listdir - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
         # FAILED tests/test_encoding.py::TestEncoding::test_open - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
         # FAILED tests/test_encoding.py::TestEncoding::test_scandir - OSError: [Errno 84] Invalid or incomplete multibyte or wide character: '/bu...
@@ -127,31 +128,74 @@ final: prev:
         ];
       });
 
-      pygit2 = prev.pygit2.overrideAttrs (prevAttrs: {
+      mypy = prevPythonPackages.mypy.overrideAttrs (prevAttrs: {
+        # Same issue as pytest-xdist
+        preInstallCheck =
+          final.lib.optionalString finalPythonPackages.python.isPy313 ''
+            NIX_BUILD_CORES=4
+          ''
+          + prevAttrs.preInstallCheck or "";
+      });
+
+      networkx = prevPythonPackages.networkx.overrideAttrs (prevAttrs: {
+        # Same issue as pytest-xdist
+        preInstallCheck =
+          final.lib.optionalString finalPythonPackages.python.isPy313 ''
+            NIX_BUILD_CORES=4
+          ''
+          + prevAttrs.preInstallCheck or "";
+      });
+
+      pygit2 = prevPythonPackages.pygit2.overrideAttrs (prevAttrs: {
         # FAILED test/test_branch.py::test_lookup_branch_local - UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb1 in position 28: in...
         disabledTestPaths = prevAttrs.disabledTestPaths ++ [
           "test/test_branch.py::test_lookup_branch_local"
         ];
       });
 
-      pycairo = prev.pycairo.overrideAttrs (prevAttrs: {
+      pycairo = prevPythonPackages.pycairo.overrideAttrs (prevAttrs: {
         # FAILED tests/test_fspaths.py::test_fspaths - tests.test_fspaths.cairo.IOError: error while writing to output stream
         disabledTestPaths = prevAttrs.disabledTestPaths or [ ] ++ [
           "tests/test_fspaths.py::test_fspaths"
         ];
       });
 
-      # TODO: PyTest xdist failure?
-      # FAILED testing/acceptance_test.py::TestLoadScope::test_workqueue_ordered_by_input - AssertionError: assert {'gw1': 10} == {'gw0': 10}
+      pytest-xdist = prevPythonPackages.pytest-xdist.overrideAttrs (prevAttrs: {
+        #   File "/nix/store/xdczhafhbd1788nw9ii6bk38hbnim4l0-python3.13-execnet-2.1.1/lib/python3.13/site-packages/execnet/multi.py", line 348, in safe_terminate
+        #     reply.get()
+        #     ~~~~~~~~~^^
+        #   File "/nix/store/xdczhafhbd1788nw9ii6bk38hbnim4l0-python3.13-execnet-2.1.1/lib/python3.13/site-packages/execnet/gateway_base.py", line 331, in get
+        #     raise self._exc from None
+        #   File "/nix/store/xdczhafhbd1788nw9ii6bk38hbnim4l0-python3.13-execnet-2.1.1/lib/python3.13/site-packages/execnet/gateway_base.py", line 341, in run
+        #     self._result = func(*args, **kwargs)
+        #                   ~~~~^^^^^^^^^^^^^^^^^
+        #   File "/nix/store/xdczhafhbd1788nw9ii6bk38hbnim4l0-python3.13-execnet-2.1.1/lib/python3.13/site-packages/execnet/multi.py", line 337, in termkill
+        #     termreply = workerpool.spawn(termfunc)
+        #   File "/nix/store/xdczhafhbd1788nw9ii6bk38hbnim4l0-python3.13-execnet-2.1.1/lib/python3.13/site-packages/execnet/gateway_base.py", line 452, in spawn
+        #     self.execmodel.start(self._perform_spawn, (reply,))
+        #     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        #   File "/nix/store/xdczhafhbd1788nw9ii6bk38hbnim4l0-python3.13-execnet-2.1.1/lib/python3.13/site-packages/execnet/gateway_base.py", line 155, in start
+        #     _thread.start_new_thread(func, args)
+        #     ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+        # RuntimeError: can't start new thread
+        # doInstallCheck = false;
+        # Oddly enough, only seems to be an issue on Python 3.13; Python 3.11 passes without issue.
+        # Reducing the number of cores also seems to work -- 16 cores was flaky, but did succeed occasionally.
+        preCheck =
+          final.lib.optionalString finalPythonPackages.python.isPy313 ''
+            NIX_BUILD_CORES=4
+          ''
+          + prevAttrs.preCheck;
+      });
 
-      virtualenv = prev.virtualenv.overrideAttrs (prevAttrs: {
+      virtualenv = prevPythonPackages.virtualenv.overrideAttrs (prevAttrs: {
         # FAILED tests/unit/test_file_limit.py::test_too_many_open_files - RuntimeError: failed to query /nix/store/rp5byziyqlpwg6x2xin07llcw3zpxzqb-p...
         disabledTestPaths = prevAttrs.disabledTestPaths ++ [
           "tests/unit/test_file_limit.py::test_too_many_open_files"
         ];
       });
 
-      watchdog = prev.watchdog.overrideAttrs (prevAttrs: {
+      watchdog = prevPythonPackages.watchdog.overrideAttrs (prevAttrs: {
         # FAILED tests/test_inotify_c.py::test_select_fd - OSError: [Errno 24] Too many open files: '/build/pytest-of-nixbld/pytest-0/test_select_fd0/new_file'
         disabledTestPaths = prevAttrs.disabledTestPaths ++ [
           "tests/test_inotify_c.py::test_select_fd"

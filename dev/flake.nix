@@ -4,7 +4,7 @@
   # For more on `inputs.nixpkgs.follows = "";`, see:
   # https://github.com/ursi/get-flake/issues/4
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs";
+    # NOTE: Specifying no nixpkgs here means we use whatever is defined at the top level.
 
     git-hooks-nix = {
       url = "github:cachix/git-hooks.nix";

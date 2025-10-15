@@ -2,6 +2,7 @@
   # config
   name,
   nixpkgs,
+  evalSystem,
   withCA,
   withCUDA,
 
@@ -11,7 +12,6 @@
   lib,
   nix,
   runCommandNoCC,
-  stdenv,
   time,
 }:
 runCommandNoCC name
@@ -26,15 +26,26 @@ runCommandNoCC name
     ];
 
     passthru = {
-      inherit nixpkgs withCA withCUDA;
+      inherit
+        evalSystem
+        nixpkgs
+        withCA
+        withCUDA
+        ;
     };
   }
   # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo
   # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
   # to a temporary store.
+  # Because of Nix's path semantics, ./configs and ./overlays create top-level store path entries with the contents
+  # of those directories. As such, references within the directory are fine, but references which escape the directory
+  # are not going to work.
   ''
     nixLog "running eval"
-    ${lib.getExe pkgsBuildHost.time} -v nix eval \
+    ${lib.getExe pkgsBuildHost.time} --verbose \
+      env \
+      GC_INITIAL_HEAP_SIZE=32G \
+      nix eval \
       --show-trace \
       --verbose \
       --offline \
@@ -53,16 +64,17 @@ runCommandNoCC name
         '
         let
           pkgs = import ${nixpkgs.outPath} {
-            system = "${stdenv.buildPlatform.system}";
-            config = import ${./mkConfig.nix} {
+            system = "${evalSystem}";
+            config = import ${./configs} {
               withCA = ${builtins.toJSON withCA};
               withCUDA = ${builtins.toJSON withCUDA};
             };
-            overlays = [ ${lib.optionalString withCA "(import ${./ca-overlay.nix})"} ];
+            overlays = import ${./overlays} {
+              withCA = ${builtins.toJSON withCA};
+            };
           };
-          inherit (import ${./lib.nix} { inherit (pkgs) lib; }) mkNestedReport;
         in
-        mkNestedReport pkgs
+        import ${./mkNestedReport.nix} pkgs
         ' | \
     jq --compact-output '[.. | select(.drvPath?) | {(.attrPath | join(".")): .}] | add' > "$out"
 
