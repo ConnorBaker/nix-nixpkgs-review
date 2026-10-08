@@ -1,0 +1,330 @@
+From 3a9454a63de257724e8a8b364f8494f62b275930 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Thu, 8 Oct 2026 20:46:05 +0000
+Subject: [PATCH] Add fingerprint-derivations setting
+
+---
+ src/libexpr/include/nix/expr/eval-settings.hh |  13 +
+ src/libexpr/primops.cc                        | 262 +++++++++++++++++-
+ 2 files changed, 272 insertions(+), 3 deletions(-)
+
+diff --git a/src/libexpr/include/nix/expr/eval-settings.hh b/src/libexpr/include/nix/expr/eval-settings.hh
+index 9d0776139..54e9622a8 100644
+--- a/src/libexpr/include/nix/expr/eval-settings.hh
++++ b/src/libexpr/include/nix/expr/eval-settings.hh
+@@ -486,6 +486,19 @@ public:
+           If set to true, flakes and trees fetched by [`builtins.fetchTree`](@docroot@/language/builtins.md#builtins-fetchTree) are only copied to the Nix store when they're used as a dependency of a derivation. This avoids copying (potentially large) source trees unnecessarily.
+         )"};
+ 
++    Setting<bool> fingerprintDerivations{
++        this,
++        false,
++        "fingerprint-derivations",
++        R"(
++          If set to true (only allowed in read-only mode), `derivationStrict` does not serialise derivations or compute
++          their real store paths. Instead, it hashes their fields directly, and returns *fingerprints* formatted as store
++          paths: two derivations' fingerprinted `drvPath`s are equal if and only if their real `drvPath`s would be, and
++          likewise for their output paths. This is much cheaper, and is enough to tell which derivations changed between
++          two evaluations done with this setting, but the paths are not real store paths and must never be built or
++          compared with real ones.
++        )"};
++
+     // FIXME: this setting should really be in libflake, but it's
+     // currently needed in mountInput().
+     Setting<bool> lazyLocks{
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index ced25790a..dc13b2138 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -1513,6 +1513,259 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
+     }
+ }
+ 
++namespace {
++
++/**
++ * Hashes an unambiguous encoding of values for `fingerprint-derivations`: every variable-length item is prefixed by its
++ * length.
++ */
++struct FingerprintHasher
++{
++    HashSink sink{HashAlgorithm::SHA256};
++
++    void num(uint64_t n)
++    {
++        sink({reinterpret_cast<const char *>(&n), sizeof(n)});
++    }
++
++    void str(std::string_view s)
++    {
++        num(s.size());
++        sink(s);
++    }
++
++    void hash(const Hash & h)
++    {
++        str({reinterpret_cast<const char *>(h.hash), h.hashSize});
++    }
++
++    /**
++     * Values that `nlohmann::json::dump()` prints identically hash identically: integers by value regardless of
++     * signedness, and floats by their text.
++     */
++    void json(const nlohmann::json & j)
++    {
++        using T = nlohmann::json::value_t;
++        switch (j.type()) {
++        case T::null:
++            str("n");
++            break;
++        case T::boolean:
++            str(j.get<bool>() ? "t" : "f");
++            break;
++        case T::number_integer:
++            str("i");
++            str(std::to_string(j.get<int64_t>()));
++            break;
++        case T::number_unsigned:
++            str("i");
++            str(std::to_string(j.get<uint64_t>()));
++            break;
++        case T::string:
++            str("s");
++            str(j.get_ref<const std::string &>());
++            break;
++        case T::array:
++            str("a");
++            num(j.size());
++            for (auto & e : j)
++                json(e);
++            break;
++        case T::object:
++            str("o");
++            object(j.get_ref<const nlohmann::json::object_t &>());
++            break;
++        default:
++            str("x");
++            str(j.dump());
++            break;
++        }
++    }
++
++    void object(const nlohmann::json::object_t & o)
++    {
++        num(o.size());
++        for (auto & [k, v] : o) {
++            str(k);
++            json(v);
++        }
++    }
++
++    void childNode(const DerivedPathMap<StringSet>::ChildNode & node)
++    {
++        num(node.value.size());
++        for (auto & o : node.value)
++            str(o);
++        num(node.childMap.size());
++        for (auto & [output, child] : node.childMap) {
++            str(output);
++            childNode(child);
++        }
++    }
++
++    Hash finish()
++    {
++        return sink.finish().hash;
++    }
++};
++
++} // namespace
++
++/**
++ * `derivationStrict` with `fingerprint-derivations`: rather than serialising `drv`, computes fingerprints of it that
++ * are equal for two derivations if and only if the real values would be:
++ *
++ * - its hash modulo (as `hashDerivationModulo` computes it), from which its output paths follow, and which is
++ *   recorded in `drvHashes` for the derivations that depend on it;
++ * - its path, which is returned.
++ *
++ * Both are computed from a single hash of everything but the input derivations, with the outputs masked: the real
++ * output paths are a function of exactly that and the inputs' hashes modulo, and the real path of exactly that and the
++ * inputs' paths.
++ *
++ * Expects the outputs of an input-addressed `drv` to be deferred, i.e. `fillInOutputPaths()` not to have been called.
++ */
++static StorePath fingerprintDerivation(EvalState & state, Derivation & drv)
++{
++    if (!settings.readOnlyMode)
++        throw UsageError("'fingerprint-derivations' requires read-only mode, since it does not compute real store paths");
++
++    /* Fail like `Derivation::unparse()` would. */
++    StructuredAttrs::checkKeyNotInUse(drv.env);
++    auto type = drv.type();
++
++    FingerprintHasher masked;
++    masked.str(drv.name);
++    masked.str(drv.platform);
++    masked.str(drv.builder);
++    masked.num(drv.args.size());
++    for (auto & a : drv.args)
++        masked.str(a);
++    masked.num(drv.env.size());
++    for (auto & [k, v] : drv.env) {
++        masked.str(k);
++        masked.str(v);
++    }
++    if (drv.structuredAttrs) {
++        masked.num(1);
++        masked.object(drv.structuredAttrs->structuredAttrs);
++    } else
++        masked.num(0);
++    masked.num(drv.inputSrcs.size());
++    for (auto & p : drv.inputSrcs)
++        masked.str(p.to_string());
++    masked.num(drv.outputs.size());
++    for (auto & [name, output] : drv.outputs) {
++        masked.str(name);
++        std::visit(
++            overloaded{
++                [&](const DerivationOutput::InputAddressed & doi) {
++                    masked.str("input-addressed");
++                    masked.str(doi.path.to_string());
++                },
++                [&](const DerivationOutput::CAFixed & dof) {
++                    masked.str("fixed");
++                    masked.str(dof.ca.printMethodAlgo());
++                    masked.hash(dof.ca.hash);
++                },
++                [&](const DerivationOutput::CAFloating & dof) {
++                    masked.str("floating");
++                    masked.str(std::string{dof.method.renderPrefix()} + printHashAlgo(dof.hashAlgo));
++                },
++                [&](const DerivationOutput::Deferred &) { masked.str("deferred"); },
++                [&](const DerivationOutput::Impure & doi) {
++                    masked.str("impure");
++                    masked.str(std::string{doi.method.renderPrefix()} + printHashAlgo(doi.hashAlgo));
++                },
++            },
++            output.raw);
++    }
++    auto maskedHash = masked.finish();
++
++    /* As `hashDerivationModulo()`, but over the fingerprint of the masked derivation. */
++    DrvHashModulo hashModulo = [&]() -> DrvHashModulo {
++        /* Fixed-output derivations aren't serialised by `hashDerivationModulo()`, so use their real hashes. */
++        if (type.isFixed())
++            return hashDerivationModulo(*state.store, drv, false);
++
++        if (std::visit(
++                overloaded{
++                    [](const DerivationType::InputAddressed &) { return false; },
++                    [](const DerivationType::ContentAddressed &) { return true; },
++                    [](const DerivationType::Impure &) { return true; },
++                    [](const DerivationType::Substituted &) { return false; },
++                },
++                type.raw))
++            return DrvHashModulo::DeferredDrv{};
++
++        std::map<std::string, StringSet> inputs2;
++        for (auto & [drvPath, node] : drv.inputDrvs.map) {
++            if (!node.childMap.empty())
++                return DrvHashModulo::DeferredDrv{};
++            std::optional<DrvHashModulo> res;
++            drvHashes.cvisit(drvPath, [&](const auto & kv) { res.emplace(kv.second); });
++            if (!res)
++                throw Error(
++                    "'fingerprint-derivations': input derivation '%s' was not created by this evaluation",
++                    state.store->printStorePath(drvPath));
++            if (std::visit(
++                    overloaded{
++                        [&](const DrvHashModulo::DeferredDrv &) { return true; },
++                        [&](const DrvHashModulo::DrvHash & h) {
++                            inputs2[h.to_string(HashFormat::Base16, false)].insert(
++                                node.value.begin(), node.value.end());
++                            return false;
++                        },
++                        [&](const DrvHashModulo::CaOutputHashes & outputHashes) {
++                            for (auto & outputName : node.value) {
++                                auto h = get(outputHashes, outputName);
++                                if (!h)
++                                    throw Error("no hash for output '%s' of derivation '%s'", outputName, drv.name);
++                                inputs2[h->to_string(HashFormat::Base16, false)].insert("out");
++                            }
++                            return false;
++                        },
++                    },
++                    res->raw))
++                return DrvHashModulo::DeferredDrv{};
++        }
++
++        FingerprintHasher h;
++        h.str("modulo");
++        h.hash(maskedHash);
++        h.num(inputs2.size());
++        for (auto & [input, outputs] : inputs2) {
++            h.str(input);
++            h.num(outputs.size());
++            for (auto & o : outputs)
++                h.str(o);
++        }
++        return h.finish();
++    }();
++
++    /* As `processDerivationOutputPaths()`. */
++    if (auto * h = std::get_if<DrvHashModulo::DrvHash>(&hashModulo.raw))
++        for (auto & [outputName, output] : drv.outputs)
++            if (std::holds_alternative<DerivationOutput::Deferred>(output.raw))
++                output = DerivationOutput::InputAddressed{
++                    .path = state.store->makeOutputPath(outputName, *h, drv.name),
++                };
++
++    FingerprintHasher path;
++    path.str("path");
++    path.hash(maskedHash);
++    path.num(drv.inputDrvs.map.size());
++    for (auto & [drvPath, node] : drv.inputDrvs.map) {
++        path.str(drvPath.to_string());
++        path.childNode(node);
++    }
++    auto drvPath = state.store->makeStorePath("fingerprint", path.finish(), std::string(drv.name) + drvExtension);
++
++    drvHashes.insert_or_assign(drvPath, std::move(hashModulo));
++
++    return drvPath;
++}
++
+ static void derivationStrictInternal(
+     EvalState & state,
+     std::string_view drvName,
+@@ -1912,14 +2165,17 @@ static void derivationStrictInternal(
+             drv.outputs.insert_or_assign(i, DerivationOutput::Deferred{});
+         }
+ 
+-        drv.fillInOutputPaths(*state.store);
++        if (!state.settings.fingerprintDerivations)
++            drv.fillInOutputPaths(*state.store);
+     }
+ 
+     /* Write the resulting term into the Nix store directory. The
+        writer handles read-only mode (in which case nothing is written,
+        which users commonly rely on to speed up evaluation in contexts
+        where they don't actually want to build anything). */
+-    auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
++    auto drvPath = state.settings.fingerprintDerivations
++                       ? fingerprintDerivation(state, drv)
++                       : state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
+     auto drvPathS = state.store->printStorePath(drvPath);
+ 
+     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
+@@ -1927,7 +2183,7 @@ static void derivationStrictInternal(
+     /* Optimisation, but required in read-only mode! because in that
+        case we don't actually write store derivations, so we can't
+        read them later. */
+-    {
++    if (!state.settings.fingerprintDerivations) {
+         auto h = hashDerivationModulo(*state.store, drv, false);
+         drvHashes.insert_or_assign(drvPath, std::move(h));
+     }
+-- 
+2.54.0
+

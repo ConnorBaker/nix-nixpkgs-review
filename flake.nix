@@ -17,6 +17,15 @@
       };
     };
 
+    # Builds `nix` with PGO; see `hydraJobs.determinate-nix`.
+    nix-optimization = {
+      url = "github:ConnorBaker/nix-optimization";
+      inputs = {
+        nix.follows = "nix";
+        flake-parts.follows = "flake-parts";
+      };
+    };
+
     # Just use whatever Nix has pinned.
     nixpkgs.follows = "nix/nixpkgs";
 
@@ -217,6 +226,31 @@
             }
           ) config.diffs;
         };
+
+      # The Nix used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
+      # it during evaluation.
+      # It is built with CSPGO (profiled on a report's evaluation of Nixpkgs) and patched with the
+      # `fingerprint-derivations` setting, which computes derivation paths that are only good for telling whether
+      # derivations changed, but much more cheaply (see ./patches/nix). The patch is against the `nix` input, so update
+      # them together.
+      flake.hydraJobs.determinate-nix = lib.genAttrs [ "x86_64-linux" ] (
+        system:
+        (inputs.nix-optimization.lib.mkOptimizedVariants {
+          inherit system;
+          profileWorkloads = [
+            [
+              "nixpkgs"
+              "parallel"
+            ]
+          ];
+          patches = [ ./patches/nix/fingerprint-derivations.patch ];
+          extraProfileEvalArgs = [
+            "--option"
+            "fingerprint-derivations"
+            "true"
+          ];
+        }).cs-pgo.nix-cli
+      );
 
       partitionedAttrs = {
         checks = "dev";

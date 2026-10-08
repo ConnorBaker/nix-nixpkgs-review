@@ -6,11 +6,11 @@
 
   # callPackage arguments
   jq,
-  runCommandNoCC,
+  runCommand,
 }:
-runCommandNoCC name
+runCommand name
   {
-    __structuredAttr = true;
+    __structuredAttrs = true;
     strictDeps = true;
 
     nativeBuildInputs = [ jq ];

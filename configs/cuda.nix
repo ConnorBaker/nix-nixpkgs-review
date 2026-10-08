@@ -18,6 +18,7 @@
     in
     package:
     builtins.all (
-      license: license.free || builtins.elem (license.shortName or null) cudaLicenseShortNames
+      # NOTE: Compound licenses (e.g., `lib.licenses.AND [ ... ]`) have no `free` attribute.
+      license: license.free or false || builtins.elem (license.shortName or null) cudaLicenseShortNames
     ) (if builtins.isList package.meta.license then package.meta.license else [ package.meta.license ]);
 }
