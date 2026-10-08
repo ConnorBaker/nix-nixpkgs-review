@@ -1,0 +1,40 @@
+From bbdc44562cd7a08ee26dd428f462ddd791eddeaf Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Thu, 8 Oct 2026 22:23:55 +0000
+Subject: [PATCH] maybeParseStorePath: don't throw for paths that obviously
+ aren't store paths
+
+---
+ src/libstore/store-dir-config.cc | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/src/libstore/store-dir-config.cc b/src/libstore/store-dir-config.cc
+index 962a3830f..47c47d9e6 100644
+--- a/src/libstore/store-dir-config.cc
++++ b/src/libstore/store-dir-config.cc
+@@ -29,6 +29,22 @@ StorePath StoreDirConfig::parseStorePath(std::string_view path) const
+ 
+ std::optional<StorePath> StoreDirConfig::maybeParseStorePath(std::string_view path) const
+ {
++#ifndef _WIN32
++    /* Exceptions are expensive, and this is called for every path that is coerced to a string (e.g. by
++       `EvalState::computeBaseName()`), most of which (e.g. files of a source tree in the store) aren't store paths.
++       So decide those without `parseStorePath()` throwing: a path that `canonPath()` leaves unchanged is a store path
++       only if it is directly in the store directory. */
++    auto isCanonical = [](std::string_view p) {
++        return !p.empty() && p[0] == '/' && (p.size() == 1 || p.back() != '/') && p.find("//") == p.npos
++               && p.find("/./") == p.npos && p.find("/../") == p.npos && !hasSuffix(p, "/.") && !hasSuffix(p, "/..");
++    };
++    if (storeDir.size() > 1 && isCanonical(path)) {
++        if (!(path.size() > storeDir.size() + 1 && hasPrefix(path, storeDir) && path[storeDir.size()] == '/'))
++            return std::nullopt;
++        if (path.find('/', storeDir.size() + 1) != path.npos)
++            return std::nullopt;
++    }
++#endif
+     try {
+         return parseStorePath(path);
+     } catch (Error &) {
+-- 
+2.54.0
+

@@ -229,10 +229,12 @@
 
       # The Nix used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
       # it during evaluation.
-      # It is built with CSPGO (profiled on a report's evaluation of Nixpkgs) and patched with the
-      # `fingerprint-derivations` setting, which computes derivation paths that are only good for telling whether
-      # derivations changed, but much more cheaply (see ./patches/nix). The patch is against the `nix` input, so update
-      # them together.
+      # It is built with CSPGO (profiled on a report's evaluation of Nixpkgs) and patched (see ./patches/nix) with:
+      # - the `fingerprint-derivations` setting, which computes derivation paths that are only good for telling whether
+      #   derivations changed, but much more cheaply;
+      # - `maybeParseStorePath()` not throwing (~1.8M exceptions per report) for paths that obviously aren't store
+      #   paths, such as the files of Nixpkgs.
+      # The patches are against the `nix` input, so update them together.
       flake.hydraJobs.determinate-nix = lib.genAttrs [ "x86_64-linux" ] (
         system:
         (inputs.nix-optimization.lib.mkOptimizedVariants {
@@ -243,7 +245,10 @@
               "parallel"
             ]
           ];
-          patches = [ ./patches/nix/fingerprint-derivations.patch ];
+          patches = [
+            ./patches/nix/fingerprint-derivations.patch
+            ./patches/nix/maybe-parse-store-path-no-throw.patch
+          ];
           extraProfileEvalArgs = [
             "--option"
             "fingerprint-derivations"
