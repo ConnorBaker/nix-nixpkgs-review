@@ -1,0 +1,38 @@
+From 5cf1da9d9d262d5d6010d9fae230d15168a36c9f Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 01:08:47 +0000
+Subject: [PATCH 16/17] forceValue(), Value::type(): always inline
+
+Both are tiny now, but GCC still emitted out-of-line copies that about
+a hundred call sites each called.
+---
+ src/libexpr/include/nix/expr/eval.hh  | 2 +-
+ src/libexpr/include/nix/expr/value.hh | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/libexpr/include/nix/expr/eval.hh b/src/libexpr/include/nix/expr/eval.hh
+index 1cbcd65ee..793fd1505 100644
+--- a/src/libexpr/include/nix/expr/eval.hh
++++ b/src/libexpr/include/nix/expr/eval.hh
+@@ -678,7 +678,7 @@ public:
+      * application, call the function and overwrite `v` with the
+      * result.  Otherwise, this is a no-op.
+      */
+-    inline void forceValue(Value & v, const PosIdx pos)
++    [[gnu::always_inline]] inline void forceValue(Value & v, const PosIdx pos)
+     {
+         v.force(*this, pos);
+     }
+diff --git a/src/libexpr/include/nix/expr/value.hh b/src/libexpr/include/nix/expr/value.hh
+index 303ccc316..1b6876107 100644
+--- a/src/libexpr/include/nix/expr/value.hh
++++ b/src/libexpr/include/nix/expr/value.hh
+@@ -1305,7 +1305,7 @@ public:
+      * Returns the normal type of a Value. This only returns nThunk if
+      * the Value hasn't been forceValue'd
+      */
+-    inline ValueType type() const
++    [[gnu::always_inline]] inline ValueType type() const
+     {
+         /* Explicit lookup table. switch() might compile down (and it does at least with GCC 14)
+            to a jump table. Let's help the compiler a bit here. */

@@ -1,0 +1,70 @@
+From b9045ac76a4c6d18e5a2469a28062be756839d31 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:55:22 +0000
+Subject: [PATCH 14/17] ValueStorage::force(): check for finished values inline
+
+Most values are already finished when they're forced, but every
+forceValue() called the out-of-line force(), with its prologue and
+epilogue (callee-saved registers, stack protector), only to find that
+there was nothing to do. Check for that case inline and only call the
+out-of-line part (now forceSlow()) for thunks and failed values.
+---
+ src/libexpr/include/nix/expr/eval-inline.hh |  2 +-
+ src/libexpr/include/nix/expr/value.hh       | 21 ++++++++++++++++++++-
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/src/libexpr/include/nix/expr/eval-inline.hh b/src/libexpr/include/nix/expr/eval-inline.hh
+index b0aed3f1d..dfb764923 100644
+--- a/src/libexpr/include/nix/expr/eval-inline.hh
++++ b/src/libexpr/include/nix/expr/eval-inline.hh
+@@ -100,7 +100,7 @@ Env & EvalMemory::allocEnv(size_t size)
+ [[gnu::tls_model("initial-exec")]] extern thread_local uint32_t myEvalThreadId;
+ 
+ template<std::size_t ptrSize>
+-void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>>::force(
++void ValueStorage<ptrSize, std::enable_if_t<detail::useBitPackedValueStorage<ptrSize>>>::forceSlow(
+     EvalState & state, PosIdx pos)
+ {
+     auto p0_ = p0.load(std::memory_order_acquire);
+diff --git a/src/libexpr/include/nix/expr/value.hh b/src/libexpr/include/nix/expr/value.hh
+index 1d98b06bb..303ccc316 100644
+--- a/src/libexpr/include/nix/expr/value.hh
++++ b/src/libexpr/include/nix/expr/value.hh
+@@ -20,6 +20,7 @@
+ #include "nix/util/source-path.hh"
+ #include "nix/expr/print-options.hh"
+ #include "nix/util/checked-arithmetic.hh"
++#include "nix/util/pos-idx.hh"
+ 
+ #include <boost/unordered/unordered_flat_map_fwd.hpp>
+ #include <nlohmann/json_fwd.hpp>
+@@ -967,10 +968,28 @@ public:
+         p0.store(pdPending, std::memory_order_relaxed);
+     }
+ 
+-    void force(EvalState & state, PosIdx pos);
++    /**
++     * Evaluate the value to weak head normal form, if it isn't already.
++     */
++    [[gnu::always_inline]] void force(EvalState & state, PosIdx pos)
++    {
++        /* Most values are forced when they're already finished, so
++           check for that inline. */
++        auto p0_ = p0.load(std::memory_order_acquire);
++        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
++        if (pd != pdThunk && pd != pdPending && pd != pdAwaited && InternalType(p0_ & 0xff) != tFailed) [[likely]]
++            return;
++        forceSlow(state, pos);
++    }
+ 
+ private:
+ 
++    /**
++     * The out-of-line part of `force()`, for values that are not
++     * finished or have failed.
++     */
++    void forceSlow(EvalState & state, PosIdx pos);
++
+     /**
+      * Given a thunk that was observed to be in the pending or awaited
+      * state, wait for it to finish. Returns the first word of the

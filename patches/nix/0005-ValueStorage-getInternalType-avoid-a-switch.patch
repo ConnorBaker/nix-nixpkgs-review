@@ -1,0 +1,69 @@
+From 3d7d0aed9641b64ac85675caff767ced6c7265df Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:15:22 +0000
+Subject: [PATCH 05/17] ValueStorage::getInternalType(): avoid a switch
+
+The switch was compiled into an indirect jump through a table, and the
+function wasn't inlined into its hundreds of callers, so every
+Value::type() etc. paid for a call and a hard-to-predict indirect
+branch. Compute the type with two conditional branches instead, and
+force inlining.
+---
+ src/libexpr/include/nix/expr/value.hh | 43 +++++++++++++--------------
+ 1 file changed, 21 insertions(+), 22 deletions(-)
+
+diff --git a/src/libexpr/include/nix/expr/value.hh b/src/libexpr/include/nix/expr/value.hh
+index 48641cc84..1d98b06bb 100644
+--- a/src/libexpr/include/nix/expr/value.hh
++++ b/src/libexpr/include/nix/expr/value.hh
+@@ -765,29 +765,28 @@ class alignas(16)
+ 
+ protected:
+     /** Get internal type currently occupying the storage. */
+-    InternalType getInternalType() const noexcept
++    [[gnu::always_inline]] InternalType getInternalType() const noexcept
+     {
+-        switch (auto pd = getPrimaryDiscriminator()) {
+-        case pdSingleDWord:
+-            /* Payloads that only use up a single double word store
+-               the full InternalType in the first byte. */
+-            return InternalType(p0 & 0xff);
+-        case pdThunk:
+-            return static_cast<InternalType>(tThunk + ((p1 & discriminatorMask) << discriminatorBits));
+-        case pdPending:
+-            return tPending;
+-        case pdAwaited:
+-            return tAwaited;
+-        case pdPairOfPointers:
+-            return static_cast<InternalType>(tListSmall + ((p1 & discriminatorMask) << discriminatorBits));
+-        /* The order must match that of the enumerations defined in InternalType. */
+-        case pdListN:
+-        case pdString:
+-        case pdPath:
+-            return static_cast<InternalType>(tListN + (pd - pdListN));
+-        [[unlikely]] default:
+-            nixUnreachableWhenHardened();
+-        }
++        /* This is called very often, so avoid a switch (which is
++           compiled to an indirect jump that is hard to predict and
++           prevents inlining). */
++        auto p0_ = p0.load();
++        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
++        /* Payloads that only use up a single double word store the
++           full InternalType in the first byte. */
++        if (pd == pdSingleDWord)
++            return InternalType(p0_ & 0xff);
++        /* Thunks and pairs of pointers store more type bits in the
++           second word. */
++        static_assert(int(tThunk) == pdThunk && int(tListSmall) == pdPairOfPointers);
++        if (pd == pdThunk || pd == pdPairOfPointers)
++            return static_cast<InternalType>(pd + ((p1 & discriminatorMask) << discriminatorBits));
++        /* The remaining primary discriminators are internal types
++           themselves. */
++        static_assert(
++            int(tPending) == pdPending && int(tAwaited) == pdAwaited && int(tListN) == pdListN
++            && int(tString) == pdString && int(tPath) == pdPath);
++        return static_cast<InternalType>(pd);
+     }
+ 
+ #define NIX_VALUE_STORAGE_DEF_PAIR_OF_PTRS(TYPE, SET, MEMBER_A, MEMBER_B)         \

@@ -1,0 +1,94 @@
+From 8600032ccf0334432c1c7bf07a3970583a278ca6 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:26:58 +0000
+Subject: [PATCH 10/17] fingerprint-derivations: don't encode hashes only to
+ hash them again
+
+Use the bytes of the input derivations' hashes modulo as keys rather
+than their base-16 encodings (the order is the same), and make the
+fingerprint store paths directly from the fingerprints instead of
+through makeStorePath(), which encodes the hash in base 16, and hashes
+it again with the store directory and the name. The fingerprints change,
+but are still equal if and only if the real paths are.
+---
+ src/libexpr/primops.cc | 39 ++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index 227afe9fb..002081b44 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -1613,6 +1613,36 @@ struct FingerprintHasher
+     }
+ };
+ 
++/**
++ * The bytes of a hash, to be hashed again without encoding them first.
++ */
++std::string rawHash(const Hash & h)
++{
++    return {reinterpret_cast<const char *>(h.hash), h.hashSize};
++}
++
++/**
++ * A store path that is a fingerprint: like the paths made by `StoreDirConfig::makeStorePath()`, but without hashing the
++ * (already unambiguous) fingerprint again.
++ */
++StorePath fingerprintStorePath(const Hash & fingerprint, std::string_view name)
++{
++    return StorePath(compressHash(fingerprint, 20), name);
++}
++
++/**
++ * The fingerprint of an output path, as `StoreDirConfig::makeOutputPath()` computes the real one from the hash modulo
++ * of a derivation.
++ */
++StorePath fingerprintOutputPath(const Hash & hashModulo, std::string_view outputName, std::string_view drvName)
++{
++    FingerprintHasher h;
++    h.str("output");
++    h.hash(hashModulo);
++    h.str(outputName);
++    return fingerprintStorePath(h.finish(), outputPathName(drvName, outputName));
++}
++
+ } // namespace
+ 
+ /**
+@@ -1716,8 +1746,7 @@ static StorePath fingerprintDerivation(EvalState & state, Derivation & drv)
+                     overloaded{
+                         [&](const DrvHashModulo::DeferredDrv &) { return true; },
+                         [&](const DrvHashModulo::DrvHash & h) {
+-                            inputs2[h.to_string(HashFormat::Base16, false)].insert(
+-                                node.value.begin(), node.value.end());
++                            inputs2[rawHash(h)].insert(node.value.begin(), node.value.end());
+                             return false;
+                         },
+                         [&](const DrvHashModulo::CaOutputHashes & outputHashes) {
+@@ -1725,7 +1754,7 @@ static StorePath fingerprintDerivation(EvalState & state, Derivation & drv)
+                                 auto h = get(outputHashes, outputName);
+                                 if (!h)
+                                     throw Error("no hash for output '%s' of derivation '%s'", outputName, drv.name);
+-                                inputs2[h->to_string(HashFormat::Base16, false)].insert("out");
++                                inputs2[rawHash(*h)].insert("out");
+                             }
+                             return false;
+                         },
+@@ -1752,7 +1781,7 @@ static StorePath fingerprintDerivation(EvalState & state, Derivation & drv)
+         for (auto & [outputName, output] : drv.outputs)
+             if (std::holds_alternative<DerivationOutput::Deferred>(output.raw))
+                 output = DerivationOutput::InputAddressed{
+-                    .path = state.store->makeOutputPath(outputName, *h, drv.name),
++                    .path = fingerprintOutputPath(*h, outputName, drv.name),
+                 };
+ 
+     FingerprintHasher path;
+@@ -1763,7 +1792,7 @@ static StorePath fingerprintDerivation(EvalState & state, Derivation & drv)
+         path.str(drvPath.to_string());
+         path.childNode(node);
+     }
+-    auto drvPath = state.store->makeStorePath("fingerprint", path.finish(), std::string(drv.name) + drvExtension);
++    auto drvPath = fingerprintStorePath(path.finish(), std::string(drv.name) + drvExtension);
+ 
+     drvHashes.insert_or_assign(drvPath, std::move(hashModulo));
+ 

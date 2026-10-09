@@ -1,0 +1,51 @@
+From 98c13c38f2baa6a19a1ddc1ae30dfd77d41b6ead Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:25:50 +0000
+Subject: [PATCH 09/17] fingerprint-derivations: hash the collected fields in
+ one go
+
+Writing each field to a HashSink allocated a 32 KiB buffer per hasher
+(three per derivation) and made a virtual call per field. Fingerprints
+are unchanged.
+---
+ src/libexpr/primops.cc | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index 88badaa2c..227afe9fb 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -1521,17 +1521,21 @@ namespace {
+  */
+ struct FingerprintHasher
+ {
+-    HashSink sink{HashAlgorithm::SHA256};
++    /**
++     * The data to hash. Collecting it and hashing it in one go is cheaper than writing each field to a `HashSink`,
++     * which allocates a large buffer and makes a virtual call per write.
++     */
++    std::string data;
+ 
+     void num(uint64_t n)
+     {
+-        sink({reinterpret_cast<const char *>(&n), sizeof(n)});
++        data.append(reinterpret_cast<const char *>(&n), sizeof(n));
+     }
+ 
+     void str(std::string_view s)
+     {
+         num(s.size());
+-        sink(s);
++        data.append(s);
+     }
+ 
+     void hash(const Hash & h)
+@@ -1605,7 +1609,7 @@ struct FingerprintHasher
+ 
+     Hash finish()
+     {
+-        return sink.finish().hash;
++        return hashString(HashAlgorithm::SHA256, data);
+     }
+ };
+ 

@@ -1,0 +1,84 @@
+From 78c7d44afa7c27bc72866441518c0a5beaac2386 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 01:00:44 +0000
+Subject: [PATCH 15/17] allocValue(), allocEnv(): don't check if the free list
+ has been initialised
+
+The per-thread free lists were held in dynamically initialised
+thread_local shared_ptrs, so every allocation first checked their guard
+variable, which (unlike the variables themselves) is not in the
+initial-exec TLS model, i.e. it took a call to __tls_get_addr(). Use
+constant-initialised pointers instead, and allocate the cells they point
+to on first use.
+---
+ src/libexpr/eval.cc                         |  7 +++++++
+ src/libexpr/include/nix/expr/eval-inline.hh | 13 +++++++++----
+ src/libexpr/include/nix/expr/eval.hh        |  6 ++++++
+ 3 files changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/src/libexpr/eval.cc b/src/libexpr/eval.cc
+index 67fd035d0..ad49cd5ba 100644
+--- a/src/libexpr/eval.cc
++++ b/src/libexpr/eval.cc
+@@ -264,6 +264,13 @@ EvalMemory::EvalMemory()
+     assertGCInitialized();
+ }
+ 
++void ** EvalMemory::allocThreadLocalFreeList()
++{
++    /* The cells, which are owned by the thread so that they're freed when it exits. */
++    static thread_local std::vector<std::shared_ptr<void *>> cells;
++    return cells.emplace_back(std::allocate_shared<void *>(traceable_allocator<void *>(), nullptr)).get();
++}
++
+ [[gnu::tls_model("initial-exec")]] thread_local EvalState::EvalContext EvalState::evalContext;
+ 
+ EvalState::EvalState(
+diff --git a/src/libexpr/include/nix/expr/eval-inline.hh b/src/libexpr/include/nix/expr/eval-inline.hh
+index dfb764923..cb4af7777 100644
+--- a/src/libexpr/include/nix/expr/eval-inline.hh
++++ b/src/libexpr/include/nix/expr/eval-inline.hh
+@@ -32,8 +32,12 @@ Value * EvalMemory::allocValue()
+ #if NIX_USE_BOEHMGC
+     /* Allocation cache for GC'd Value objects. Boehm GC is already a global resource, so thread_local is
+        a natural solution. Multiple EvalState instances on the same thread will reuse the same cache. */
+-    [[gnu::tls_model("initial-exec")]] static thread_local std::shared_ptr<void *> valueAllocCache{
+-        std::allocate_shared<void *>(traceable_allocator<void *>(), nullptr)};
++    [[gnu::tls_model("initial-exec")]] static thread_local void ** valueAllocCache = nullptr;
++
++    /* Note: `valueAllocCache` is constant-initialised, so accessing it doesn't require a (slow) check whether it has
++       been initialised. */
++    if (!valueAllocCache) [[unlikely]]
++        valueAllocCache = allocThreadLocalFreeList();
+ 
+     /* We use the boehm batch allocator to speed up allocations of Values (of which there are many).
+        GC_malloc_many returns a linked list of objects of the given size, where the first word
+@@ -70,8 +74,9 @@ Env & EvalMemory::allocEnv(size_t size)
+     if (size == 1) {
+         /* Allocation cache for size-1 Env objects. Boehm GC is already a global resource, so thread_local is
+            a natural solution. Multiple EvalState instances on the same thread will reuse the same cache. */
+-        [[gnu::tls_model("initial-exec")]] static thread_local std::shared_ptr<void *> env1AllocCache{
+-            std::allocate_shared<void *>(traceable_allocator<void *>(), nullptr)};
++        [[gnu::tls_model("initial-exec")]] static thread_local void ** env1AllocCache = nullptr;
++        if (!env1AllocCache) [[unlikely]]
++            env1AllocCache = allocThreadLocalFreeList();
+         /* see allocValue for explanations. */
+         if (!*env1AllocCache) {
+             *env1AllocCache = GC_malloc_many(sizeof(Env) + sizeof(Value *));
+diff --git a/src/libexpr/include/nix/expr/eval.hh b/src/libexpr/include/nix/expr/eval.hh
+index e9a535cb7..1cbcd65ee 100644
+--- a/src/libexpr/include/nix/expr/eval.hh
++++ b/src/libexpr/include/nix/expr/eval.hh
+@@ -346,6 +346,12 @@ public:
+ 
+     Bindings * allocBindings(size_t capacity);
+ 
++    /**
++     * Allocate a per-thread cell for a free list of GC-allocated objects, in memory that the GC scans. It is freed
++     * when the thread exits.
++     */
++    static void ** allocThreadLocalFreeList();
++
+     BindingsBuilder buildBindings(SymbolTable & symbols, size_t capacity)
+     {
+         return BindingsBuilder(*this, symbols, allocBindings(capacity), capacity);

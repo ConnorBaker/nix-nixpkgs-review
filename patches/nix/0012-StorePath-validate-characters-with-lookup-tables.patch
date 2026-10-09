@@ -1,0 +1,74 @@
+From 4f90492c44e60b27b86443eac15205043ad11014 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:41:39 +0000
+Subject: [PATCH 12/17] StorePath: validate characters with lookup tables
+
+Parsing store paths is common during evaluation (e.g. every string
+context element is parsed when strings are concatenated or coerced),
+and the per-character range checks of the hash part and the name took
+about a dozen instructions per character.
+---
+ src/libstore/path.cc | 32 +++++++++++++++++++++++++++++---
+ 1 file changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/src/libstore/path.cc b/src/libstore/path.cc
+index e2e53551b..70ca8b54c 100644
+--- a/src/libstore/path.cc
++++ b/src/libstore/path.cc
+@@ -1,3 +1,5 @@
++#include <array>
++
+ #include <nlohmann/json.hpp>
+ 
+ #include "nix/store/store-dir-config.hh"
+@@ -9,6 +11,31 @@ void BadStorePathName::anchor() {}
+ 
+ void BadStorePath::anchor() {}
+ 
++namespace {
++
++/**
++ * A table of the characters for which `pred` holds, which is cheaper to look up than evaluating `pred`.
++ */
++constexpr std::array<bool, 256> charTable(bool (*pred)(char c))
++{
++    std::array<bool, 256> table{};
++    for (size_t c = 0; c < table.size(); ++c)
++        table[c] = pred(static_cast<char>(c));
++    return table;
++}
++
++// See nameRegexStr for the definition
++constexpr auto validNameChars = charTable([](char c) {
++    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '+' || c == '-'
++           || c == '.' || c == '_' || c == '?' || c == '=';
++});
++
++constexpr auto validHashChars = charTable([](char c) {
++    return c != 'e' && c != 'o' && c != 'u' && c != 't' && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'));
++});
++
++} // namespace
++
+ void checkName(std::string_view name)
+ {
+     if (name.empty())
+@@ -32,8 +59,7 @@ void checkName(std::string_view name)
+         }
+     }
+     for (auto c : name)
+-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '+' || c == '-'
+-              || c == '.' || c == '_' || c == '?' || c == '='))
++        if (!validNameChars[static_cast<unsigned char>(c)])
+             throw BadStorePathName("name '%s' contains illegal character '%s'", name, c);
+ }
+ 
+@@ -54,7 +80,7 @@ StorePath::StorePath(std::string_view _baseName)
+     if (baseName[HashLen] != '-')
+         throw BadStorePath("'%s' can't name a store path because the hash part is not followed by a '-'", baseName);
+     for (auto c : hashPart())
+-        if (c == 'e' || c == 'o' || c == 'u' || c == 't' || !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')))
++        if (!validHashChars[static_cast<unsigned char>(c)])
+             throw BadStorePath("store path '%s' contains illegal base-32 character '%s'", baseName, c);
+     checkPathName(baseName, name());
+ }

@@ -1,0 +1,53 @@
+From 225d091a710f93dfbe56538c48b882ca7429e148 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:38:29 +0000
+Subject: [PATCH 11/17] PosixDirectorySourceAccessor: don't re-insert cached
+ directory fds
+
+openParentAndUpsert() upserted the parent directory's fd into the LRU
+cache even when openParent() had just found it there (and made it the
+most recently used entry). Re-inserting it erased and re-created the
+entry (two tree lookups, a CanonPath copy, allocations) while holding
+the cache's lock. Only insert directories that were newly opened.
+---
+ src/libutil/posix-source-accessor.cc | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/src/libutil/posix-source-accessor.cc b/src/libutil/posix-source-accessor.cc
+index 5fe44d4e5..982176a64 100644
+--- a/src/libutil/posix-source-accessor.cc
++++ b/src/libutil/posix-source-accessor.cc
+@@ -258,7 +258,7 @@ private:
+ 
+     /**
+      * Get the parent directory of path. The second pair element might be an owning file descriptor
+-     * if path.parent().isRoot() is false.
++     * if path.parent().isRoot() is false. Caches the parent directory if it had to be opened.
+      */
+     std::pair<Descriptor, std::shared_ptr<AutoCloseFD>> openParent(const CanonPath & path);
+ 
+@@ -397,7 +397,11 @@ std::pair<Descriptor, std::shared_ptr<AutoCloseFD>> PosixDirectorySourceAccessor
+                 O_DIRECTORY | O_CLOEXEC,
+             0,
+             std::move(cb));
+-        return {parentFdOwning.get(), make_ref<AutoCloseFD>(std::move(parentFdOwning))};
++        auto fd = make_ref<AutoCloseFD>(std::move(parentFdOwning));
++        /* Cache the newly opened directory. (A cache hit has been made the most recently used entry already.) */
++        if (dirFdCache && *fd)
++            insertIntoDirFdCache(parent, fd);
++        return {fd->get(), fd.get_ptr()};
+     } catch (SymlinkNotAllowed & e) {
+         /* Need to fixup the error message to include the actual path relative to the (possibly) cached fd. */
+         throw SymlinkNotAllowed(anchor / e.path, "path '%s' (or its ancestor) is a symlink", showPath(anchor / e.path));
+@@ -418,11 +422,6 @@ PosixDirectorySourceAccessor::openParentAndUpsert(const CanonPath & path, bool i
+         throw SysError("opening directory '%1%'", showPath(path.parent().value()));
+     }
+ 
+-    if (dirFdCache && parentFdOwning) {
+-        assert(*parentFdOwning);
+-        insertIntoDirFdCache(path.parent().value(), ref<AutoCloseFD>(parentFdOwning));
+-    }
+-
+     return {parentFd, parentFdOwning};
+ }
+ 

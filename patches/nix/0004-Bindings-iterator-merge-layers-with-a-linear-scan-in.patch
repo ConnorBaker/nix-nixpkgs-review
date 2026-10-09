@@ -1,0 +1,212 @@
+From 4aa64317024ffeb895756ad08d50cb791da24ab8 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:11:18 +0000
+Subject: [PATCH 04/17] Bindings::iterator: merge layers with a linear scan
+ instead of a heap
+
+A layered attrset has at most 8 layers (usually 2 or 3), so picking the
+next attribute by scanning the cursors is cheaper than maintaining a
+binary heap, which in addition was rebuilt with make_heap() on every
+push. The iteration order is unchanged: by symbol, with earlier layers
+overriding later ones.
+---
+ src/libexpr/include/nix/expr/attr-set.hh | 141 +++++------------------
+ 1 file changed, 26 insertions(+), 115 deletions(-)
+
+diff --git a/src/libexpr/include/nix/expr/attr-set.hh b/src/libexpr/include/nix/expr/attr-set.hh
+index 4d3821fed..d1a30c113 100644
+--- a/src/libexpr/include/nix/expr/attr-set.hh
++++ b/src/libexpr/include/nix/expr/attr-set.hh
+@@ -151,53 +151,20 @@ public:
+              */
+             pointer end;
+ 
+-            /**
+-             * Priority of the value. Lesser values have more priority (i.e. they override
+-             * attributes that appear later in the linked list of Bindings).
+-             */
+-            uint32_t priority;
+-
+-            pointer operator->() const noexcept
+-            {
+-                return current;
+-            }
+-
+-            reference get() const noexcept
+-            {
+-                return *current;
+-            }
+-
+             bool empty() const noexcept
+             {
+                 return current == end;
+             }
+-
+-            void increment() noexcept
+-            {
+-                ++current;
+-            }
+-
+-            void consume(Symbol name) noexcept
+-            {
+-                while (!empty() && current->name <= name)
+-                    ++current;
+-            }
+-
+-            GENERATE_CMP(BindingsCursor, me->current->name, me->priority)
+         };
+ 
+-        using QueueStorageType = boost::container::static_vector<BindingsCursor, maxLayers>;
+-
+-        /**
+-         * Comparator implementing the override priority / name ordering
+-         * for BindingsCursor.
+-         */
+-        static constexpr auto comp = std::greater<BindingsCursor>();
+-
+         /**
+-         * A priority queue used to implement an on-the-fly k-way merge.
++         * One cursor per non-empty layer, in order of decreasing priority: attributes in earlier layers override
++         * attributes with the same name in later ones.
++         *
++         * Since there are at most `maxLayers` layers, finding the next attribute by scanning all cursors is cheaper
++         * than maintaining a priority queue.
+          */
+-        QueueStorageType cursorHeap;
++        boost::container::static_vector<BindingsCursor, maxLayers> cursors;
+ 
+         /**
+          * The attribute the iterator currently points to.
+@@ -205,92 +172,37 @@ public:
+         pointer current = nullptr;
+ 
+         /**
+-         * Whether iterating over a single attribute and not a merge chain.
++         * Whether iterating over a chain of layers rather than a single one.
+          */
+         bool doMerge = true;
+ 
+-        void push(BindingsCursor cursor) noexcept
+-        {
+-            cursorHeap.push_back(cursor);
+-            std::ranges::make_heap(cursorHeap, comp);
+-        }
+-
+-        [[nodiscard]] BindingsCursor pop() noexcept
+-        {
+-            std::ranges::pop_heap(cursorHeap, comp);
+-            auto cursor = cursorHeap.back();
+-            cursorHeap.pop_back();
+-            return cursor;
+-        }
+-
+-        iterator & finished() noexcept
++        /**
++         * Point to the attribute with the smallest name among the cursors, taking the earliest layer's on ties.
++         */
++        void selectNext() noexcept
+         {
+             current = nullptr;
+-            return *this;
+-        }
+-
+-        void next(BindingsCursor cursor) noexcept
+-        {
+-            current = &cursor.get();
+-            cursor.increment();
+-
+-            if (!cursor.empty())
+-                push(cursor);
+-        }
+-
+-        std::optional<BindingsCursor> consumeAllUntilCurrentName() noexcept
+-        {
+-            auto cursor = pop();
+-            Symbol lastHandledName = current->name;
+-
+-            while (cursor->name <= lastHandledName) {
+-                cursor.consume(lastHandledName);
+-                if (!cursor.empty())
+-                    push(cursor);
+-
+-                if (cursorHeap.empty())
+-                    return std::nullopt;
+-
+-                cursor = pop();
+-            }
+-
+-            return cursor;
++            for (auto & cursor : cursors)
++                if (!cursor.empty() && (!current || cursor.current->name < current->name))
++                    current = cursor.current;
+         }
+ 
+         explicit iterator(const Bindings & attrs) noexcept
+             : doMerge(attrs.baseLayer)
+         {
+-            auto pushBindings = [this, priority = unsigned{0}](const Bindings & layer) mutable {
+-                auto first = layer.attrs;
+-                push(
+-                    BindingsCursor{
+-                        .current = first,
+-                        .end = first + layer.numAttrs,
+-                        .priority = priority++,
+-                    });
+-            };
+-
+             if (!doMerge) {
+                 if (attrs.empty())
+                     return;
+-
+                 current = attrs.attrs;
+-                pushBindings(attrs);
+-
++                cursors.push_back({.current = attrs.attrs, .end = attrs.attrs + attrs.numAttrs});
+                 return;
+             }
+ 
+-            const Bindings * layer = &attrs;
+-            while (layer) {
++            for (const Bindings * layer = &attrs; layer; layer = layer->baseLayer)
+                 if (layer->numAttrs != 0)
+-                    pushBindings(*layer);
+-                layer = layer->baseLayer;
+-            }
++                    cursors.push_back({.current = layer->attrs, .end = layer->attrs + layer->numAttrs});
+ 
+-            if (cursorHeap.empty())
+-                return;
+-
+-            next(pop());
++            selectNext();
+         }
+ 
+     public:
+@@ -310,19 +222,18 @@ public:
+         {
+             if (!doMerge) {
+                 ++current;
+-                if (current == cursorHeap.front().end)
+-                    return finished();
++                if (current == cursors.front().end)
++                    current = nullptr;
+                 return *this;
+             }
+ 
+-            if (cursorHeap.empty())
+-                return finished();
+-
+-            auto cursor = consumeAllUntilCurrentName();
+-            if (!cursor)
+-                return finished();
++            /* Every cursor is at a name no smaller than the current one, so skip the current name in all layers. */
++            Symbol name = current->name;
++            for (auto & cursor : cursors)
++                while (!cursor.empty() && cursor.current->name == name)
++                    ++cursor.current;
+ 
+-            next(*cursor);
++            selectNext();
+             return *this;
+         }
+ 

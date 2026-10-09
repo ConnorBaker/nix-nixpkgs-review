@@ -1,0 +1,55 @@
+From 81ee4502c3897a299b9060fe8e83bd1cbd38a0c7 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:21:40 +0000
+Subject: [PATCH 07/17] derivationStrict, printValueAsJSON: insert sorted
+ attributes with a hint
+
+Both visit attributes in lexicographic order, so inserting each one at
+the end of the std::map is amortised constant time instead of a full
+tree descent with string comparisons.
+---
+ src/libexpr/primops.cc       | 7 +++++--
+ src/libexpr/value-to-json.cc | 4 +++-
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index dc13b2138..88badaa2c 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -1914,7 +1914,9 @@ static void derivationStrictInternal(
+                     if (i->name == state.s.structuredAttrs)
+                         continue;
+ 
+-                    jsonObject->structuredAttrs.emplace(key, printValueAsJSON(state, true, *i->value, pos, context));
++                    /* Attributes are processed in order, so insert them at the end. */
++                    jsonObject->structuredAttrs.emplace_hint(
++                        jsonObject->structuredAttrs.end(), key, printValueAsJSON(state, true, *i->value, pos, context));
+ 
+                     switch (i->name.getId()) {
+                     case EvalState::s.builder.getId():
+@@ -1988,7 +1990,8 @@ static void derivationStrictInternal(
+                             drvName);
+                         drv.structuredAttrs = StructuredAttrs::parse(s);
+                     } else {
+-                        drv.env.emplace(key, s);
++                        /* Attributes are processed in order, so insert them at the end. */
++                        drv.env.emplace_hint(drv.env.end(), key, s);
+                         switch (i->name.getId()) {
+                         case EvalState::s.builder.getId():
+                             drv.builder = std::move(s);
+diff --git a/src/libexpr/value-to-json.cc b/src/libexpr/value-to-json.cc
+index 134417e16..f7c5981c8 100644
+--- a/src/libexpr/value-to-json.cc
++++ b/src/libexpr/value-to-json.cc
+@@ -92,8 +92,10 @@ json printValueAsJSON(
+                 return recurse(res, *i->value, i->pos);
+             else {
+                 res = json::object();
++                auto & obj = res.get_ref<json::object_t &>();
+                 for (auto & a : v.attrs()->lexicographicOrder(state.symbols)) {
+-                    json & j = res.emplace(state.symbols[a->name], json()).first.value();
++                    /* Attributes are visited in order, so insert them at the end. */
++                    json & j = obj.emplace_hint(obj.end(), state.symbols[a->name], json())->second;
+                     try {
+                         recurse(j, *a->value, a->pos);
+                     } catch (Error & e) {

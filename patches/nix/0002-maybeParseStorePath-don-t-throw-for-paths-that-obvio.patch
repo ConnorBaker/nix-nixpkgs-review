@@ -1,8 +1,8 @@
 From bbdc44562cd7a08ee26dd428f462ddd791eddeaf Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Thu, 8 Oct 2026 22:23:55 +0000
-Subject: [PATCH] maybeParseStorePath: don't throw for paths that obviously
- aren't store paths
+Subject: [PATCH 02/17] maybeParseStorePath: don't throw for paths that
+ obviously aren't store paths
 
 ---
  src/libstore/store-dir-config.cc | 16 ++++++++++++++++
@@ -35,6 +35,3 @@ index 962a3830f..47c47d9e6 100644
      try {
          return parseStorePath(path);
      } catch (Error &) {
--- 
-2.54.0
-

@@ -1,0 +1,35 @@
+From b06d034f5dce25f8bd2c33c4a4d9aa3cdb690d36 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:42:42 +0000
+Subject: [PATCH 13/17] builtins.any, builtins.all: don't build error context
+ strings on every call
+
+The error contexts of the arguments were concatenated into newly
+allocated strings on every call, although they are only needed in case
+of an error.
+---
+ src/libexpr/primops.cc | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
+index 002081b44..8cf1bee9a 100644
+--- a/src/libexpr/primops.cc
++++ b/src/libexpr/primops.cc
+@@ -4483,9 +4483,15 @@ static RegisterPrimOp primop_foldlStrict({
+ static void anyOrAll(bool any, EvalState & state, const PosIdx pos, Value ** args, Value & v)
+ {
+     state.forceFunction(
+-        *args[0], pos, std::string("while evaluating the first argument passed to builtins.") + (any ? "any" : "all"));
++        *args[0],
++        pos,
++        any ? "while evaluating the first argument passed to builtins.any"
++            : "while evaluating the first argument passed to builtins.all");
+     state.forceList(
+-        *args[1], pos, std::string("while evaluating the second argument passed to builtins.") + (any ? "any" : "all"));
++        *args[1],
++        pos,
++        any ? "while evaluating the second argument passed to builtins.any"
++            : "while evaluating the second argument passed to builtins.all");
+ 
+     std::string_view errorCtx = any ? "while evaluating the return value of the function passed to builtins.any"
+                                     : "while evaluating the return value of the function passed to builtins.all";

@@ -1,0 +1,110 @@
+From 5bb64af6aec502b43a9e708b28ddc09a5fcc90fb Mon Sep 17 00:00:00 2001
+From: Connor Baker <ConnorBaker01@gmail.com>
+Date: Fri, 9 Oct 2026 01:19:49 +0000
+Subject: [PATCH 17/17] libexpr: without Boehm GC, bump-allocate from
+ per-thread chunks
+
+Without a garbage collector nothing that EvalMemory::allocBytes() returns is ever freed, so calling calloc() for every
+Value, Env and Bindings only costs allocator bookkeeping. Instead, carve them out of per-thread 1 MiB chunks of zeroed
+memory by bumping a pointer (big objects still get their own calloc()).
+
+For a read-only parallel evaluation of all of Nixpkgs (16 threads), this took 2.9% fewer instructions, 4.9% fewer
+cycles and 0.5G less memory, with identical results.
+---
+ src/libexpr/eval-gc.cc                      | 23 +++++++++++++++++++++
+ src/libexpr/include/nix/expr/eval-gc.hh     | 21 +++++++++++++++++++
+ src/libexpr/include/nix/expr/eval-inline.hh | 11 +++++++++-
+ 3 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/src/libexpr/eval-gc.cc b/src/libexpr/eval-gc.cc
+index 402983094..dc429489e 100644
+--- a/src/libexpr/eval-gc.cc
++++ b/src/libexpr/eval-gc.cc
+@@ -1,3 +1,5 @@
++#include <cstdlib>
++
+ #include "nix/util/environment-variables.hh"
+ #include "nix/util/processes.hh"
+ #include "nix/expr/eval-settings.hh"
+@@ -276,6 +278,27 @@ size_t getGCCycles()
+     return static_cast<size_t>(GC_get_gc_no()) - gcCyclesAfterInit;
+ }
+ 
++#else
++
++constinit thread_local EvalMemoryChunk evalMemoryChunk;
++
++void * allocBytesSlow(size_t n)
++{
++    /* Big enough that refilling is rare, small enough that the unused
++       rest of each thread's last chunk doesn't matter. */
++    constexpr size_t chunkSize = 1 << 20;
++
++    /* Don't waste the rest of the current chunk on big objects. */
++    if (n > chunkSize / 8)
++        return calloc(n, 1);
++
++    auto p = (char *) calloc(chunkSize, 1);
++    if (!p)
++        return nullptr;
++    evalMemoryChunk = {.next = p + n, .end = p + chunkSize};
++    return p;
++}
++
+ #endif
+ 
+ static bool gcInitialised = false;
+diff --git a/src/libexpr/include/nix/expr/eval-gc.hh b/src/libexpr/include/nix/expr/eval-gc.hh
+index 4865ce3db..abf4cd82d 100644
+--- a/src/libexpr/include/nix/expr/eval-gc.hh
++++ b/src/libexpr/include/nix/expr/eval-gc.hh
+@@ -85,6 +85,27 @@ constexpr size_t gcStackSwitchSlack = 512;
+  * `coroutine-gc.hh` for how such a mismatch can come about.
+  */
+ void gcSaveStackPointer(struct GC_stack * stk);
++#else
++
++/**
++ * Without a garbage collector, nothing that `EvalMemory::allocBytes()`
++ * allocates is ever freed, so it allocates from per-thread chunks of
++ * zeroed memory by bumping a pointer instead of calling `calloc()` for
++ * every object. This is the current thread's chunk.
++ */
++struct EvalMemoryChunk
++{
++    char * next = nullptr;
++    char * end = nullptr;
++};
++
++[[gnu::tls_model("initial-exec")]] extern constinit thread_local EvalMemoryChunk evalMemoryChunk;
++
++/**
++ * Allocate `n` zeroed bytes (a multiple of 16) when they don't fit in
++ * `evalMemoryChunk`. Returns `nullptr` if out of memory.
++ */
++void * allocBytesSlow(size_t n);
+ #endif
+ 
+ } // namespace nix
+diff --git a/src/libexpr/include/nix/expr/eval-inline.hh b/src/libexpr/include/nix/expr/eval-inline.hh
+index cb4af7777..33bab3223 100644
+--- a/src/libexpr/include/nix/expr/eval-inline.hh
++++ b/src/libexpr/include/nix/expr/eval-inline.hh
+@@ -19,7 +19,16 @@ inline void * EvalMemory::allocBytes(size_t n)
+ #if NIX_USE_BOEHMGC
+     p = GC_MALLOC(n);
+ #else
+-    p = calloc(n, 1);
++    /* Keep everything 16-byte aligned (like malloc(), and as `Value` requires), and give zero-sized objects
++       distinct addresses. */
++    n = (std::max(n, size_t(1)) + 15) & ~size_t(15);
++    auto & chunk = evalMemoryChunk;
++    if (n <= size_t(chunk.end - chunk.next)) [[likely]] {
++        p = chunk.next;
++        chunk.next += n;
++        return p;
++    }
++    p = allocBytesSlow(n);
+ #endif
+     if (!p)
+         outOfMemory();

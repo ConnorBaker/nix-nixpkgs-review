@@ -1,0 +1,47 @@
+From 04e3435a519249dc7cdb938693b358954c4ce1ed Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:24:16 +0000
+Subject: [PATCH 08/17] Bindings::lexicographicOrder(): look up each name only
+ once
+
+The comparator resolved both symbols on every comparison, i.e. several
+dependent loads per side. Resolve them once up front instead.
+---
+ src/libexpr/include/nix/expr/attr-set.hh | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/src/libexpr/include/nix/expr/attr-set.hh b/src/libexpr/include/nix/expr/attr-set.hh
+index d1a30c113..7dee75890 100644
+--- a/src/libexpr/include/nix/expr/attr-set.hh
++++ b/src/libexpr/include/nix/expr/attr-set.hh
+@@ -4,6 +4,7 @@
+ #include "nix/expr/nixexpr.hh"
+ #include "nix/expr/symbol-table.hh"
+ 
++#include <boost/container/small_vector.hpp>
+ #include <boost/container/static_vector.hpp>
+ #include <boost/iterator/function_output_iterator.hpp>
+ 
+@@ -330,13 +331,16 @@ public:
+      */
+     std::vector<const Attr *> lexicographicOrder(const SymbolTable & symbols) const
+     {
++        /* Look up the names once, rather than twice per comparison. */
++        boost::container::small_vector<std::pair<std::string_view, const Attr *>, 64> named;
++        named.reserve(size());
++        for (auto & a : *this)
++            named.emplace_back(symbols[a.name], &a);
++        std::ranges::sort(named, std::less{}, [](const auto & p) { return p.first; });
+         std::vector<const Attr *> res;
+-        res.reserve(size());
+-        std::ranges::transform(*this, std::back_inserter(res), [](const Attr & a) { return &a; });
+-        std::ranges::sort(res, [&](const Attr * a, const Attr * b) {
+-            std::string_view sa = symbols[a->name], sb = symbols[b->name];
+-            return sa < sb;
+-        });
++        res.reserve(named.size());
++        for (auto & [_, a] : named)
++            res.push_back(a);
+         return res;
+     }
+ 

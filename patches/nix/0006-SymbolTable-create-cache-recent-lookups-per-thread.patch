@@ -1,0 +1,105 @@
+From b55de04d128f5e6e47ae0f03f9c3447c9d425d29 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:19:36 +0000
+Subject: [PATCH 06/17] SymbolTable::create(): cache recent lookups per thread
+
+Looking up a string in the concurrent symbol set hashes it and takes two
+reader locks (atomic read-modify-writes), and creating symbols from
+string values is common, e.g. for the names passed to removeAttrs, which
+nixpkgs' mkDerivation calls for every package. Keep a small per-thread
+cache keyed on the address of the string; an entry is only used if its
+symbol's string is equal to the requested one.
+---
+ src/libexpr/include/nix/expr/symbol-table.hh |  8 +++++
+ src/libexpr/symbol-table.cc                  | 34 ++++++++++++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/src/libexpr/include/nix/expr/symbol-table.hh b/src/libexpr/include/nix/expr/symbol-table.hh
+index 231510829..81d916b31 100644
+--- a/src/libexpr/include/nix/expr/symbol-table.hh
++++ b/src/libexpr/include/nix/expr/symbol-table.hh
+@@ -252,6 +252,8 @@ public:
+ class SymbolTable
+ {
+ private:
++    static std::atomic<uint64_t> nextId;
++
+     /**
+      * SymbolTable is an append only data structure.
+      * During its lifetime the monotonic buffer holds all strings and nodes, if the symbol set is node based.
+@@ -264,9 +266,15 @@ private:
+      */
+     boost::concurrent_flat_set<SymbolStr, SymbolStr::Hash, SymbolStr::Equal> symbols;
+ 
++    /**
++     * Unique identifier of this symbol table, used to tag the entries of the per-thread cache in `create()`.
++     */
++    const uint64_t id;
++
+ public:
+     SymbolTable(const StaticSymbolTable & staticSymtab)
+         : arena(1 << 30)
++        , id(nextId++)
+     {
+         // Reserve symbol ID 0 and ensure alignment of the first allocation.
+         arena.allocate(Symbol::alignment);
+diff --git a/src/libexpr/symbol-table.cc b/src/libexpr/symbol-table.cc
+index 052c72570..5f33fe9f5 100644
+--- a/src/libexpr/symbol-table.cc
++++ b/src/libexpr/symbol-table.cc
+@@ -1,6 +1,9 @@
+ #include "nix/expr/symbol-table.hh"
+ #include "nix/util/logging.hh"
+ 
++#include <array>
++#include <memory>
++
+ #include <sys/mman.h>
+ 
+ namespace nix {
+@@ -31,14 +34,45 @@ size_t ContiguousArena::allocate(size_t bytes)
+     return offset;
+ }
+ 
++std::atomic<uint64_t> SymbolTable::nextId{1};
++
+ Symbol SymbolTable::create(std::string_view s)
+ {
++    /* Looking up a string in `symbols` is relatively expensive (it
++       hashes the string and takes locks), so keep a small per-thread
++       cache of recent lookups, keyed on the address of the
++       string. This helps for strings that are converted to symbols
++       over and over again, typically string literals such as the
++       names passed to `removeAttrs`. A cache entry is only used if
++       its symbol is equal to `s`, so it doesn't matter if the string
++       it was created for has since been freed. */
++    struct CacheEntry
++    {
++        uint64_t tableId = 0;
++        const char * data = nullptr;
++        Symbol symbol;
++    };
++
++    using Cache = std::array<CacheEntry, 256>;
++
++    [[gnu::tls_model("initial-exec")]] static thread_local std::unique_ptr<Cache> cache;
++
++    if (!cache) [[unlikely]]
++        cache = std::make_unique<Cache>();
++
++    auto & entry = (*cache)[(reinterpret_cast<uintptr_t>(s.data()) >> 4) % cache->size()];
++
++    if (entry.tableId == id && entry.data == s.data() && (*this)[entry.symbol] == s)
++        return entry.symbol;
++
+     uint32_t idx;
+ 
+     auto visit = [&](const SymbolStr & sym) { idx = ((const char *) sym.s) - arena.data; };
+ 
+     symbols.insert_and_visit(SymbolStr::Key{s, arena}, visit, visit);
+ 
++    entry = {.tableId = id, .data = s.data(), .symbol = Symbol(idx)};
++
+     return Symbol(idx);
+ }
+ 
