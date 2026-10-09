@@ -235,6 +235,8 @@
       # - `maybeParseStorePath()` not throwing (~1.8M exceptions per report) for paths that obviously aren't store
       #   paths, such as the files of Nixpkgs.
       # The patches are against the `nix` input, so update them together.
+      # It is built without Boehm GC: reports never collect anyway (see mkReport.nix), and allocating with mimalloc
+      # instead took ~2% fewer cycles and 2G less memory (24G peak), with identical reports.
       flake.hydraJobs.determinate-nix = lib.genAttrs [ "x86_64-linux" ] (
         system:
         (inputs.nix-optimization.lib.mkOptimizedVariants {
@@ -254,6 +256,7 @@
             "fingerprint-derivations"
             "true"
           ];
+          enableGC = false;
         }).cs-pgo.nix-cli
       );
 

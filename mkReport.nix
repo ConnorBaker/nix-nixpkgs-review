@@ -50,7 +50,8 @@ runCommand name
   # buys little: for x86_64-linux with CUDA (~98k derivations, 16 eval cores, Determinate Nix 3.23.0) GC_DONT_GC=1 took
   # 11.4s with a 26G peak and a 16G initial heap 12.5s with a 19G peak, but an 8G initial heap (below the ~14G live set)
   # took 252s. The uncollected garbage is never touched again, so under memory pressure it is swapped out cheaply (e.g.,
-  # to zram, which compressed it ~4.5:1).
+  # to zram, which compressed it ~4.5:1). (A `nix` built without Boehm GC, like flake.nix's `hydraJobs.determinate-nix`,
+  # ignores GC_DONT_GC and never collects either.)
   ''
     nixLog "running eval"
     ${lib.getExe pkgsBuildHost.time} --verbose \
