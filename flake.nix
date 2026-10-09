@@ -206,17 +206,18 @@
               # Maybe something to do with lazy-trees?
               value = pkgs.writeShellScriptBin name' ''
                 echo "added derivations: $(${lib.getExe pkgs.jq} < ${diff} '.added | length')"
-                ${lib.getExe pkgs.jq} --raw-output '.added | sort[]' < ${diff}
+                ${lib.getExe pkgs.jq} --raw-output '.added[] | join(".")' < ${diff}
                 echo
 
                 echo "changed derivations: $(${lib.getExe pkgs.jq} < ${diff} '.changed | length')"
-                ${lib.getExe pkgs.jq} --raw-output '.changed | sort[]' < ${diff}
+                ${lib.getExe pkgs.jq} --raw-output '.changed[] | join(".")' < ${diff}
                 echo
 
                 echo "building added and changed derivations"
+                # Quote each attribute name, since some contain dots.
                 ${lib.getExe pkgs.jq} \
                   --raw-output \
-                  '(.added + .changed) | sort[] | ".#${packageSetAttrPath}." + . ' \
+                  '(.added + .changed)[] | ".#${packageSetAttrPath}." + (map(tojson) | join("."))' \
                   < ${diff} | \
                 nix build \
                   --keep-going \

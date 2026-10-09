@@ -14,7 +14,6 @@
 
   # callPackage arguments
   pkgsBuildHost,
-  jq,
   lib,
   nix,
   runCommand,
@@ -26,7 +25,6 @@ runCommand name
     strictDeps = true;
 
     nativeBuildInputs = [
-      jq
       nix
       time
     ];
@@ -40,6 +38,9 @@ runCommand name
         ;
     };
   }
+  # The report is mkNestedReport.nix's result as JSON, as `nix eval` prints it: nested like Nixpkgs, with a derivation
+  # path for each derivation (and null for attributes that aren't derivations or failed to evaluate). Flattening it
+  # (e.g., with jq) took ~0.8s per report, longer than diffing two reports as they are (see mkDiff.nix).
   # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo
   # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
   # to a temporary store.
@@ -91,10 +92,8 @@ runCommand name
           );
         in
         import ${./mkNestedReport.nix} pkgs
-        ' | \
-    jq --compact-output \
-      '. as $in | [paths(type == "string")] | map(. as $p | {key: ($p | join(".")), value: {drvPath: ($in | getpath($p)), attrPath: $p}}) | from_entries' \
+        ' \
       > "$out"
 
-    nixLog "computed $(jq 'length' < "$out") derivations"
+    nixLog "computed $(grep -o '"${builtins.storeDir}/' "$out" | wc -l) derivations"
   ''
