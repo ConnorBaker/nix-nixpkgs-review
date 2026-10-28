@@ -8,7 +8,7 @@
   # Nix file (or directory) whose expression maps { withCA, withCUDA } to the arguments (other than `system`) to import
   # Nixpkgs with; defaults to ./configs and ./overlays.
   nixpkgsArgs ? null,
-  # Whether `nix` has the `fingerprint-derivations` setting (see ./patches/nix) and should use it: the reports' derivation
+  # Whether `nix` has the `fingerprint-derivations` setting (see ./patches/nix) and should use it: the reports' output
   # paths are then fingerprints, which are only good for comparing with reports made the same way.
   fingerprintDerivations ? false,
 
@@ -38,7 +38,7 @@ runCommand name
         ;
     };
   }
-  # The report is mkNestedReport.nix's result as JSON, as `nix eval` prints it: nested like Nixpkgs, with a derivation
+  # The report is mkNestedReport.nix's result as JSON, as `nix eval` prints it: nested like Nixpkgs, with an output
   # path for each derivation (and null for attributes that aren't derivations or failed to evaluate). Flattening it
   # (e.g., with jq) took ~0.8s per report, longer than diffing two reports as they are (see mkDiff.nix).
   # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo

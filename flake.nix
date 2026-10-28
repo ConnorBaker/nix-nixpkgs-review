@@ -233,8 +233,8 @@
       # It is built with CSPGO and then BOLT (both profiled on a parallel evaluation of Nixpkgs) and with the patches in
       # ./patches/nix
       # (`git format-patch` output, applied in order), notably:
-      # - the `fingerprint-derivations` setting, which computes derivation paths that are only good for telling whether
-      #   derivations changed, but much more cheaply;
+      # - the `fingerprint-derivations` setting, which computes derivation and output paths that are only good for
+      #   telling whether derivations changed, but much more cheaply;
       # - `maybeParseStorePath()` not throwing (~1.8M exceptions per report) for paths that obviously aren't store
       #   paths, such as the files of Nixpkgs;
       # - evaluator hot path fixes (~20% fewer instructions per report), which keep the reports identical (apart from
