@@ -1,4 +1,4 @@
-From 240202fa1058cfb020872b9dbf53148ed0843824 Mon Sep 17 00:00:00 2001
+From 577edd96dce652382fb5582c8cd90bdc8585c5c6 Mon Sep 17 00:00:00 2001
 From: Connor Baker <ConnorBaker01@gmail.com>
 Date: Fri, 9 Oct 2026 01:19:49 +0000
 Subject: [PATCH 15/15] libexpr: without Boehm GC, bump-allocate from
@@ -100,7 +100,7 @@ index 4865ce3db..d73c949de 100644
  
  } // namespace nix
 diff --git a/src/libexpr/include/nix/expr/eval-inline.hh b/src/libexpr/include/nix/expr/eval-inline.hh
-index cb4af7777..c64d5d7fc 100644
+index cec66457b..dab89f08e 100644
 --- a/src/libexpr/include/nix/expr/eval-inline.hh
 +++ b/src/libexpr/include/nix/expr/eval-inline.hh
 @@ -19,7 +19,19 @@ inline void * EvalMemory::allocBytes(size_t n)

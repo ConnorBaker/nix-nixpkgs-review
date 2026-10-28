@@ -1,4 +1,4 @@
-From f2f2fe1f5ea7b82db3737b07cbdce0372e4dcc65 Mon Sep 17 00:00:00 2001
+From a7f5fa0655111d80728c538a32ad6b8bd607501d Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:41:39 +0000
 Subject: [PATCH 10/15] StorePath: validate characters with lookup tables

@@ -1,4 +1,4 @@
-From 4e995db79850b04bcb5b86b37b2a0df736bff7cb Mon Sep 17 00:00:00 2001
+From 010b85fa9bee1566f55f647ba064fc59d0f6a92d Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:21:40 +0000
 Subject: [PATCH 07/15] derivationStrict, printValueAsJSON: insert sorted
@@ -13,10 +13,10 @@ tree descent with string comparisons.
  2 files changed, 8 insertions(+), 3 deletions(-)
 
 diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
-index 8c95e9d1b..b12dc0cb1 100644
+index 73037398c..11bda94e0 100644
 --- a/src/libexpr/primops.cc
 +++ b/src/libexpr/primops.cc
-@@ -1947,7 +1947,9 @@ static void derivationStrictInternal(
+@@ -1963,7 +1963,9 @@ static void derivationStrictInternal(
                      if (i->name == state.s.structuredAttrs)
                          continue;
  
@@ -27,7 +27,7 @@ index 8c95e9d1b..b12dc0cb1 100644
  
                      switch (i->name.getId()) {
                      case EvalState::s.builder.getId():
-@@ -2021,7 +2023,8 @@ static void derivationStrictInternal(
+@@ -2037,7 +2039,8 @@ static void derivationStrictInternal(
                              drvName);
                          drv.structuredAttrs = StructuredAttrs::parse(s);
                      } else {
@@ -38,10 +38,10 @@ index 8c95e9d1b..b12dc0cb1 100644
                          case EvalState::s.builder.getId():
                              drv.builder = std::move(s);
 diff --git a/src/libexpr/value-to-json.cc b/src/libexpr/value-to-json.cc
-index 134417e16..f7c5981c8 100644
+index 2846cb46f..7ab6629de 100644
 --- a/src/libexpr/value-to-json.cc
 +++ b/src/libexpr/value-to-json.cc
-@@ -92,8 +92,10 @@ json printValueAsJSON(
+@@ -63,8 +63,10 @@ json printValueAsJSON(
                  return recurse(res, *i->value, i->pos);
              else {
                  res = json::object();

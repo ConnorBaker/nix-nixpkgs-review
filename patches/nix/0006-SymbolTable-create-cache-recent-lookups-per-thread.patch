@@ -1,4 +1,4 @@
-From 0fe35102f156c7b83e4b274faff9243d77be88b1 Mon Sep 17 00:00:00 2001
+From bfc3506a15edaa68341b55b1fc79dc4b9b156d57 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:19:36 +0000
 Subject: [PATCH 06/15] SymbolTable::create(): cache recent lookups per thread

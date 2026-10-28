@@ -1,4 +1,4 @@
-From c1d2dcdfc07dd790a98fb07e114c4a4ff69e4455 Mon Sep 17 00:00:00 2001
+From c10edd7adf711bdff69f5aa40a102a0175b1a57c Mon Sep 17 00:00:00 2001
 From: Connor Baker <ConnorBaker01@gmail.com>
 Date: Wed, 28 Oct 2026 00:53:31 -0700
 Subject: [PATCH 01/15] Add fingerprint-derivations setting
@@ -57,10 +57,10 @@ index 9d0776139..54e9622a8 100644
      // currently needed in mountInput().
      Setting<bool> lazyLocks{
 diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
-index ced25790a..8c95e9d1b 100644
+index 368724825..73037398c 100644
 --- a/src/libexpr/primops.cc
 +++ b/src/libexpr/primops.cc
-@@ -1513,6 +1513,292 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
+@@ -1529,6 +1529,292 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
      }
  }
  
@@ -353,7 +353,7 @@ index ced25790a..8c95e9d1b 100644
  static void derivationStrictInternal(
      EvalState & state,
      std::string_view drvName,
-@@ -1912,14 +2198,17 @@ static void derivationStrictInternal(
+@@ -1928,14 +2214,17 @@ static void derivationStrictInternal(
              drv.outputs.insert_or_assign(i, DerivationOutput::Deferred{});
          }
  
@@ -373,7 +373,7 @@ index ced25790a..8c95e9d1b 100644
      auto drvPathS = state.store->printStorePath(drvPath);
  
      printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
-@@ -1927,7 +2216,7 @@ static void derivationStrictInternal(
+@@ -1943,7 +2232,7 @@ static void derivationStrictInternal(
      /* Optimisation, but required in read-only mode! because in that
         case we don't actually write store derivations, so we can't
         read them later. */

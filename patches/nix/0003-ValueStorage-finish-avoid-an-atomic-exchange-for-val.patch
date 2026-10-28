@@ -1,4 +1,4 @@
-From 7c0bfce6fd674dc07b0cbff07ab2686273dccb9e Mon Sep 17 00:00:00 2001
+From 8f676671273a4d24708c48f5a3cf524291b976b1 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:00:23 +0000
 Subject: [PATCH 03/15] ValueStorage::finish(): avoid an atomic exchange for

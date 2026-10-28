@@ -1,4 +1,4 @@
-From 0b2d3117bfb65e6fc69a111153e6db2578ea2550 Mon Sep 17 00:00:00 2001
+From 89ef2c5c63b4308b9c9a9ecf7304d6a0ea74bdc0 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:55:22 +0000
 Subject: [PATCH 12/15] ValueStorage::force(): check for finished values inline
@@ -14,10 +14,10 @@ out-of-line part (now forceSlow()) for thunks and failed values.
  2 files changed, 21 insertions(+), 2 deletions(-)
 
 diff --git a/src/libexpr/include/nix/expr/eval-inline.hh b/src/libexpr/include/nix/expr/eval-inline.hh
-index b0aed3f1d..dfb764923 100644
+index dafc4b52f..64d685657 100644
 --- a/src/libexpr/include/nix/expr/eval-inline.hh
 +++ b/src/libexpr/include/nix/expr/eval-inline.hh
-@@ -100,7 +100,7 @@ Env & EvalMemory::allocEnv(size_t size)
+@@ -115,7 +115,7 @@ Env & EvalMemory::allocEnv(size_t size)
  [[gnu::tls_model("initial-exec")]] extern thread_local uint32_t myEvalThreadId;
  
  template<std::size_t ptrSize>

@@ -1,4 +1,4 @@
-From b59650be8931c196a211c4c6f7e0fe1586c404b3 Mon Sep 17 00:00:00 2001
+From 0e3bdb3c1b5002f6d2bdd5aa8900ba67be8f9717 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Thu, 8 Oct 2026 22:23:55 +0000
 Subject: [PATCH 02/15] maybeParseStorePath: don't throw for paths that
