@@ -230,7 +230,8 @@
 
       # The Nix used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
       # it during evaluation.
-      # It is built with CSPGO (profiled on a report's evaluation of Nixpkgs) and with the patches in ./patches/nix
+      # It is built with CSPGO and then BOLT (both profiled on a parallel evaluation of Nixpkgs) and with the patches in
+      # ./patches/nix
       # (`git format-patch` output, applied in order), notably:
       # - the `fingerprint-derivations` setting, which computes derivation paths that are only good for telling whether
       #   derivations changed, but much more cheaply;
@@ -262,7 +263,7 @@
             "true"
           ];
           enableGC = false;
-        }).cs-pgo.nix-cli
+        }).cs-pgo-bolt.nix-cli
       );
 
       partitionedAttrs = {
