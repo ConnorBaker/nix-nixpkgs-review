@@ -1,7 +1,7 @@
-From 7e50a661e18b021a997ee51a365ad170be39d439 Mon Sep 17 00:00:00 2001
+From 4ac9a4fcba38a2adac259016b13a4ee6a9c47d2d Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:42:42 +0000
-Subject: [PATCH 11/15] builtins.any, builtins.all: don't build error context
+Subject: [PATCH 12/13] builtins.any, builtins.all: don't build error context
  strings on every call
 
 The error contexts of the arguments were concatenated into newly
@@ -12,10 +12,10 @@ of an error.
  1 file changed, 8 insertions(+), 2 deletions(-)
 
 diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
-index 11bda94e0..33d70a871 100644
+index 93be75e45..b50a13a8b 100644
 --- a/src/libexpr/primops.cc
 +++ b/src/libexpr/primops.cc
-@@ -4499,9 +4499,15 @@ static RegisterPrimOp primop_foldlStrict({
+@@ -4497,9 +4497,15 @@ static RegisterPrimOp primop_foldlStrict({
  static void anyOrAll(bool any, EvalState & state, const PosIdx pos, Value ** args, Value & v)
  {
      state.forceFunction(

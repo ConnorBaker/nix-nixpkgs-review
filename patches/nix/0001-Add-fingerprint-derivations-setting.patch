@@ -1,7 +1,7 @@
-From c10edd7adf711bdff69f5aa40a102a0175b1a57c Mon Sep 17 00:00:00 2001
+From d7254b74cf6fc3a15e53046b1c8a4b8528be856d Mon Sep 17 00:00:00 2001
 From: Connor Baker <ConnorBaker01@gmail.com>
 Date: Wed, 28 Oct 2026 00:53:31 -0700
-Subject: [PATCH 01/15] Add fingerprint-derivations setting
+Subject: [PATCH 01/13] Add fingerprint-derivations setting
 
 With `fingerprint-derivations` (only allowed in read-only mode),
 `derivationStrict` doesn't serialise derivations or compute their real
@@ -28,10 +28,188 @@ virtual call per write), and hashes are hashed again as their raw bytes,
 without encoding them first. Fingerprint store paths are made directly
 from the fingerprints rather than through `makeStorePath()`.
 ---
+ src/libexpr-tests/fingerprint-derivations.cc  | 157 +++++++++
+ src/libexpr-tests/meson.build                 |   1 +
  src/libexpr/include/nix/expr/eval-settings.hh |  13 +
- src/libexpr/primops.cc                        | 295 +++++++++++++++++-
- 2 files changed, 305 insertions(+), 3 deletions(-)
+ src/libexpr/primops.cc                        | 313 +++++++++++++++++-
+ 4 files changed, 471 insertions(+), 13 deletions(-)
+ create mode 100644 src/libexpr-tests/fingerprint-derivations.cc
 
+diff --git a/src/libexpr-tests/fingerprint-derivations.cc b/src/libexpr-tests/fingerprint-derivations.cc
+new file mode 100644
+index 000000000..d1da33854
+--- /dev/null
++++ b/src/libexpr-tests/fingerprint-derivations.cc
+@@ -0,0 +1,157 @@
++#include <gtest/gtest.h>
++#include <nlohmann/json.hpp>
++
++#include "nix/expr/tests/libexpr.hh"
++#include "nix/store/globals.hh"
++
++namespace nix {
++
++/**
++ * `fingerprint-derivations` must give equal fingerprints for two derivations exactly when their real `drvPath`s (or
++ * output paths) are equal. Evaluates the same derivations with and without it, and checks that the fingerprints and
++ * the real paths correspond one to one.
++ */
++class FingerprintDerivationsTest : public LibExprTest
++{
++protected:
++    void SetUp() override
++    {
++        LibExprTest::SetUp();
++        settings.readOnlyMode = true;
++        experimentalFeatureSettings.set("extra-experimental-features", "ca-derivations");
++    }
++
++    void TearDown() override
++    {
++        settings.readOnlyMode = false;
++        experimentalFeatureSettings.set("experimental-features", "pipe-operators");
++        LibExprTest::TearDown();
++    }
++
++    /**
++     * Each derivation's `drvPath` and output paths, as `<attr>.drvPath` and `<attr>.<output>`.
++     */
++    std::map<std::string, std::string> paths(EvalState & state)
++    {
++        auto expr = R"(
++          let
++            mk = args: derivation ({ system = "x86_64-linux"; builder = "/bin/sh"; } // args);
++            fetch =
++              url: mode:
++              mk {
++                name = "src";
++                inherit url;
++                outputHashMode = mode;
++                outputHashAlgo = "sha256";
++                outputHash = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=";
++              };
++            drvs = rec {
++              a = mk { name = "a"; };
++              aAgain = mk { name = "a"; };
++              aWithEnv = mk { name = "a"; x = "1"; };
++              aWithArgs = mk { name = "a"; args = [ "-c" "true" ]; };
++              aRenamed = mk { name = "b"; };
++
++              # The same fixed output, fetched from different places or in a different way.
++              src1 = fetch "https://example.org/1" "flat";
++              src2 = fetch "https://example.org/2" "flat";
++              srcRecursive = fetch "https://example.org/1" "recursive";
++              useSrc1 = mk { name = "use"; src = src1; };
++              useSrc2 = mk { name = "use"; src = src2; };
++              useSrcRecursive = mk { name = "use"; src = srcRecursive; };
++              useUseSrc1 = mk { name = "use2"; dep = useSrc1; };
++              useUseSrc2 = mk { name = "use2"; dep = useSrc2; };
++
++              multi = mk { name = "m"; outputs = [ "out" "dev" ]; };
++              multiReordered = mk { name = "m"; outputs = [ "dev" "out" ]; };
++              useOut = mk { name = "u"; dep = multi.out; };
++              useDev = mk { name = "u"; dep = multi.dev; };
++              useBoth = mk { name = "u"; dep = "${multi.out} ${multi.dev}"; };
++
++              structured = mk { name = "s"; __structuredAttrs = true; nested = { a = 1; b = [ true null "x" ]; }; };
++              structuredAgain = mk { name = "s"; __structuredAttrs = true; nested = { b = [ true null "x" ]; a = 1; }; };
++              structuredFloat = mk { name = "s"; __structuredAttrs = true; nested = { a = 1.0; b = [ true null "x" ]; }; };
++              structuredString = mk { name = "s"; __structuredAttrs = true; nested = { a = "1"; b = [ true null "x" ]; }; };
++              unstructured = mk { name = "s"; nested = "1"; };
++
++              ca = mk { name = "ca"; __contentAddressed = true; };
++              caAgain = mk { name = "ca"; __contentAddressed = true; };
++              caWithEnv = mk { name = "ca"; __contentAddressed = true; x = "1"; };
++              useCa = mk { name = "uc"; dep = ca; };
++              useCaWithEnv = mk { name = "uc"; dep = caWithEnv; };
++            };
++          in
++          builtins.unsafeDiscardStringContext (
++            builtins.toJSON (
++              builtins.mapAttrs (
++                _: d:
++                { drvPath = d.drvPath; }
++                // builtins.listToAttrs (map (o: { name = o; value = d.${o}.outPath; }) (d.outputs or [ "out" ]))
++              ) drvs
++            )
++          )
++        )";
++        Value v;
++        state.eval(state.parseExprFromString(expr, state.rootPath(CanonPath::root)), v);
++        state.forceValue(v, noPos);
++        std::map<std::string, std::string> res;
++        for (auto & [attr, drv] : nlohmann::json::parse(v.string_view()).items())
++            for (auto & [key, path] : drv.items())
++                res.emplace(attr + "." + key, path.get<std::string>());
++        return res;
++    }
++};
++
++TEST_F(FingerprintDerivationsTest, equalExactlyWhenRealPathsAreEqual)
++{
++    auto real = paths(state);
++
++    EvalSettings fingerprintSettings{readOnlyMode};
++    fingerprintSettings.nixPath = {};
++    fingerprintSettings.fingerprintDerivations = true;
++    EvalState fingerprintState({}, state.store, fetchSettings, fingerprintSettings, nullptr);
++    auto fingerprinted = paths(fingerprintState);
++
++    ASSERT_EQ(real.size(), fingerprinted.size());
++    std::map<std::string, std::string> realToFingerprint, fingerprintToReal;
++    for (auto & [key, realPath] : real) {
++        auto & fingerprint = fingerprinted.at(key);
++        /* Fixed-output derivations' output paths are real ones either way. */
++        if (key.ends_with(".drvPath")) {
++            EXPECT_NE(fingerprint, realPath) << key;
++        }
++        auto [i, newReal] = realToFingerprint.emplace(realPath, fingerprint);
++        EXPECT_EQ(i->second, fingerprint) << key << " has the same real path as a path with a different fingerprint";
++        auto [j, newFingerprint] = fingerprintToReal.emplace(fingerprint, realPath);
++        EXPECT_EQ(j->second, realPath) << key << " has the same fingerprint as a path with a different real path";
++    }
++
++    /* Check that the cases above test both directions. */
++    EXPECT_EQ(real.at("a.drvPath"), real.at("aAgain.drvPath"));
++    EXPECT_NE(real.at("src1.drvPath"), real.at("src2.drvPath"));
++    EXPECT_EQ(real.at("src1.out"), real.at("src2.out"));
++    EXPECT_NE(real.at("useSrc1.drvPath"), real.at("useSrc2.drvPath"));
++    EXPECT_EQ(real.at("useSrc1.out"), real.at("useSrc2.out"));
++    EXPECT_EQ(real.at("useUseSrc1.out"), real.at("useUseSrc2.out"));
++    EXPECT_NE(real.at("useSrc1.out"), real.at("useSrcRecursive.out"));
++    EXPECT_EQ(real.at("structured.drvPath"), real.at("structuredAgain.drvPath"));
++    EXPECT_NE(real.at("structured.drvPath"), real.at("structuredFloat.drvPath"));
++    EXPECT_NE(real.at("structured.drvPath"), real.at("structuredString.drvPath"));
++    EXPECT_NE(real.at("useCa.drvPath"), real.at("useCaWithEnv.drvPath"));
++}
++
++TEST_F(FingerprintDerivationsTest, requiresReadOnlyMode)
++{
++    settings.readOnlyMode = false;
++    EvalSettings fingerprintSettings{readOnlyMode};
++    fingerprintSettings.nixPath = {};
++    fingerprintSettings.fingerprintDerivations = true;
++    EvalState fingerprintState({}, state.store, fetchSettings, fingerprintSettings, nullptr);
++    auto expr = fingerprintState.parseExprFromString(
++        R"((derivation { name = "a"; system = "x86_64-linux"; builder = "/bin/sh"; }).drvPath)",
++        fingerprintState.rootPath(CanonPath::root));
++    Value v;
++    EXPECT_THROW(fingerprintState.eval(expr, v), UsageError);
++}
++
++} // namespace nix
+diff --git a/src/libexpr-tests/meson.build b/src/libexpr-tests/meson.build
+index cd80c1da1..27c142bb9 100644
+--- a/src/libexpr-tests/meson.build
++++ b/src/libexpr-tests/meson.build
+@@ -51,6 +51,7 @@ sources = files(
+   'derived-path.cc',
+   'error_traces.cc',
+   'eval.cc',
++  'fingerprint-derivations.cc',
+   'json.cc',
+   'lazy-fetcher-attr.cc',
+   'main.cc',
 diff --git a/src/libexpr/include/nix/expr/eval-settings.hh b/src/libexpr/include/nix/expr/eval-settings.hh
 index 9d0776139..54e9622a8 100644
 --- a/src/libexpr/include/nix/expr/eval-settings.hh
@@ -57,10 +235,10 @@ index 9d0776139..54e9622a8 100644
      // currently needed in mountInput().
      Setting<bool> lazyLocks{
 diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
-index 368724825..73037398c 100644
+index 368724825..5998b8f01 100644
 --- a/src/libexpr/primops.cc
 +++ b/src/libexpr/primops.cc
-@@ -1529,6 +1529,292 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
+@@ -1529,6 +1529,286 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
      }
  }
  
@@ -273,14 +451,8 @@ index 368724825..73037398c 100644
 +        if (type.isFixed())
 +            return hashDerivationModulo(*state.store, drv, false);
 +
-+        if (std::visit(
-+                overloaded{
-+                    [](const DerivationType::InputAddressed &) { return false; },
-+                    [](const DerivationType::ContentAddressed &) { return true; },
-+                    [](const DerivationType::Impure &) { return true; },
-+                    [](const DerivationType::Substituted &) { return false; },
-+                },
-+                type.raw))
++        /* Floating content-addressed and impure derivations. */
++        if (type.isCA())
 +            return DrvHashModulo::DeferredDrv{};
 +
 +        std::map<std::string, StringSet> inputs2;
@@ -353,32 +525,49 @@ index 368724825..73037398c 100644
  static void derivationStrictInternal(
      EvalState & state,
      std::string_view drvName,
-@@ -1928,14 +2214,17 @@ static void derivationStrictInternal(
+@@ -1928,25 +2208,32 @@ static void derivationStrictInternal(
              drv.outputs.insert_or_assign(i, DerivationOutput::Deferred{});
          }
  
 -        drv.fillInOutputPaths(*state.store);
++        /* `fingerprintDerivation()` fills them in with fingerprints. */
 +        if (!state.settings.fingerprintDerivations)
 +            drv.fillInOutputPaths(*state.store);
      }
  
-     /* Write the resulting term into the Nix store directory. The
-        writer handles read-only mode (in which case nothing is written,
-        which users commonly rely on to speed up evaluation in contexts
-        where they don't actually want to build anything). */
+-    /* Write the resulting term into the Nix store directory. The
+-       writer handles read-only mode (in which case nothing is written,
+-       which users commonly rely on to speed up evaluation in contexts
+-       where they don't actually want to build anything). */
 -    auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
-+    auto drvPath = state.settings.fingerprintDerivations
-+                       ? fingerprintDerivation(state, drv)
-+                       : state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
-     auto drvPathS = state.store->printStorePath(drvPath);
+-    auto drvPathS = state.store->printStorePath(drvPath);
++    auto drvPath = [&] {
++        /* Records its own hash modulo in `drvHashes`. */
++        if (state.settings.fingerprintDerivations)
++            return fingerprintDerivation(state, drv);
  
-     printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
-@@ -1943,7 +2232,7 @@ static void derivationStrictInternal(
-     /* Optimisation, but required in read-only mode! because in that
-        case we don't actually write store derivations, so we can't
-        read them later. */
+-    printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
++        /* Write the resulting term into the Nix store directory. The
++           writer handles read-only mode (in which case nothing is written,
++           which users commonly rely on to speed up evaluation in contexts
++           where they don't actually want to build anything). */
++        auto drvPath = state.store->writeDerivation(*state.asyncPathWriter, drv, state.repair, provenance);
+ 
+-    /* Optimisation, but required in read-only mode! because in that
+-       case we don't actually write store derivations, so we can't
+-       read them later. */
 -    {
-+    if (!state.settings.fingerprintDerivations) {
++        /* Optimisation, but required in read-only mode! because in that
++           case we don't actually write store derivations, so we can't
++           read them later. */
          auto h = hashDerivationModulo(*state.store, drv, false);
          drvHashes.insert_or_assign(drvPath, std::move(h));
-     }
+-    }
++        return drvPath;
++    }();
++    auto drvPathS = state.store->printStorePath(drvPath);
++
++    printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
+ 
+     auto result = state.buildBindings(1 + drv.outputs.size());
+     result.alloc(state.s.drvPath)

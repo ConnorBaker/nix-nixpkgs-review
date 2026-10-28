@@ -1,7 +1,7 @@
-From bfc3506a15edaa68341b55b1fc79dc4b9b156d57 Mon Sep 17 00:00:00 2001
+From 3426f11044089b6e4a138f0b3a04a6352cae35bd Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:19:36 +0000
-Subject: [PATCH 06/15] SymbolTable::create(): cache recent lookups per thread
+Subject: [PATCH 08/13] SymbolTable::create(): cache recent lookups per thread
 
 Looking up a string in the concurrent symbol set hashes it and takes two
 reader locks (atomic read-modify-writes), and creating symbols from
@@ -10,9 +10,9 @@ nixpkgs' mkDerivation calls for every package. Keep a small per-thread
 cache keyed on the address of the string; an entry is only used if its
 symbol's string is equal to the requested one.
 ---
- src/libexpr/include/nix/expr/symbol-table.hh |  8 +++++
- src/libexpr/symbol-table.cc                  | 34 ++++++++++++++++++++
- 2 files changed, 42 insertions(+)
+ src/libexpr/include/nix/expr/symbol-table.hh |  8 ++++
+ src/libexpr/symbol-table.cc                  | 43 ++++++++++++++++++++
+ 2 files changed, 51 insertions(+)
 
 diff --git a/src/libexpr/include/nix/expr/symbol-table.hh b/src/libexpr/include/nix/expr/symbol-table.hh
 index 231510829..81d916b31 100644
@@ -44,20 +44,21 @@ index 231510829..81d916b31 100644
          // Reserve symbol ID 0 and ensure alignment of the first allocation.
          arena.allocate(Symbol::alignment);
 diff --git a/src/libexpr/symbol-table.cc b/src/libexpr/symbol-table.cc
-index 052c72570..5f33fe9f5 100644
+index 052c72570..a88e7e8fb 100644
 --- a/src/libexpr/symbol-table.cc
 +++ b/src/libexpr/symbol-table.cc
-@@ -1,6 +1,9 @@
+@@ -1,5 +1,10 @@
  #include "nix/expr/symbol-table.hh"
  #include "nix/util/logging.hh"
- 
++#include "nix/util/sync.hh"
++
 +#include <array>
 +#include <memory>
-+
++#include <vector>
+ 
  #include <sys/mman.h>
  
- namespace nix {
-@@ -31,14 +34,45 @@ size_t ContiguousArena::allocate(size_t bytes)
+@@ -31,14 +36,52 @@ size_t ContiguousArena::allocate(size_t bytes)
      return offset;
  }
  
@@ -82,10 +83,17 @@ index 052c72570..5f33fe9f5 100644
 +
 +    using Cache = std::array<CacheEntry, 256>;
 +
-+    [[gnu::tls_model("initial-exec")]] static thread_local std::unique_ptr<Cache> cache;
++    /* A raw pointer, since a `thread_local` with a destructor is
++       checked on every access to register the destructor. (The
++       caches themselves are too large for static TLS.) They are
++       never freed, but stay reachable from `caches`, so leak
++       checkers don't report them. */
++    [[gnu::tls_model("initial-exec")]] static thread_local Cache * cache = nullptr;
 +
-+    if (!cache) [[unlikely]]
-+        cache = std::make_unique<Cache>();
++    if (!cache) [[unlikely]] {
++        static auto * caches = new Sync<std::vector<std::unique_ptr<Cache>>>;
++        cache = caches->lock()->emplace_back(std::make_unique<Cache>()).get();
++    }
 +
 +    auto & entry = (*cache)[(reinterpret_cast<uintptr_t>(s.data()) >> 4) % cache->size()];
 +

@@ -1,17 +1,23 @@
-From 89ef2c5c63b4308b9c9a9ecf7304d6a0ea74bdc0 Mon Sep 17 00:00:00 2001
-From: Connor Baker <connorbaker01@gmail.com>
-Date: Fri, 9 Oct 2026 00:55:22 +0000
-Subject: [PATCH 12/15] ValueStorage::force(): check for finished values inline
+From 216379799b787f71d0d759876bcce8bb4a52f935 Mon Sep 17 00:00:00 2001
+From: Connor Baker <ConnorBaker01@gmail.com>
+Date: Wed, 28 Oct 2026 07:53:17 -0700
+Subject: [PATCH 05/13] ValueStorage::force(): check for finished values inline
 
 Most values are already finished when they're forced, but every
 forceValue() called the out-of-line force(), with its prologue and
 epilogue (callee-saved registers, stack protector), only to find that
 there was nothing to do. Check for that case inline and only call the
-out-of-line part (now forceSlow()) for thunks and failed values.
+out-of-line part (now forceSlow(), which is never inlined) for thunks
+and failed values.
+
+Also always inline forceValue() and Value::type(): both are tiny, but
+GCC still emitted out-of-line copies that about a hundred call sites
+each called.
 ---
  src/libexpr/include/nix/expr/eval-inline.hh |  2 +-
- src/libexpr/include/nix/expr/value.hh       | 21 ++++++++++++++++++++-
- 2 files changed, 21 insertions(+), 2 deletions(-)
+ src/libexpr/include/nix/expr/eval.hh        |  2 +-
+ src/libexpr/include/nix/expr/value.hh       | 24 +++++++++++++++++++--
+ 3 files changed, 24 insertions(+), 4 deletions(-)
 
 diff --git a/src/libexpr/include/nix/expr/eval-inline.hh b/src/libexpr/include/nix/expr/eval-inline.hh
 index dafc4b52f..64d685657 100644
@@ -26,8 +32,21 @@ index dafc4b52f..64d685657 100644
      EvalState & state, PosIdx pos)
  {
      auto p0_ = p0.load(std::memory_order_acquire);
+diff --git a/src/libexpr/include/nix/expr/eval.hh b/src/libexpr/include/nix/expr/eval.hh
+index dec66fdd8..62f0d09aa 100644
+--- a/src/libexpr/include/nix/expr/eval.hh
++++ b/src/libexpr/include/nix/expr/eval.hh
+@@ -680,7 +680,7 @@ public:
+      * application, call the function and overwrite `v` with the
+      * result.  Otherwise, this is a no-op.
+      */
+-    inline void forceValue(Value & v, const PosIdx pos)
++    [[gnu::always_inline]] inline void forceValue(Value & v, const PosIdx pos)
+     {
+         v.force(*this, pos);
+     }
 diff --git a/src/libexpr/include/nix/expr/value.hh b/src/libexpr/include/nix/expr/value.hh
-index 1d98b06bb..303ccc316 100644
+index 6d1298c72..fe4de5a9f 100644
 --- a/src/libexpr/include/nix/expr/value.hh
 +++ b/src/libexpr/include/nix/expr/value.hh
 @@ -20,6 +20,7 @@
@@ -38,7 +57,7 @@ index 1d98b06bb..303ccc316 100644
  
  #include <boost/unordered/unordered_flat_map_fwd.hpp>
  #include <nlohmann/json_fwd.hpp>
-@@ -967,10 +968,28 @@ public:
+@@ -977,10 +978,29 @@ public:
          p0.store(pdPending, std::memory_order_relaxed);
      }
  
@@ -52,7 +71,7 @@ index 1d98b06bb..303ccc316 100644
 +           check for that inline. */
 +        auto p0_ = p0.load(std::memory_order_acquire);
 +        auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
-+        if (pd != pdThunk && pd != pdPending && pd != pdAwaited && InternalType(p0_ & 0xff) != tFailed) [[likely]]
++        if (!isUnfinished(pd) && InternalType(p0_ & 0xff) != tFailed) [[likely]]
 +            return;
 +        forceSlow(state, pos);
 +    }
@@ -61,10 +80,20 @@ index 1d98b06bb..303ccc316 100644
  
 +    /**
 +     * The out-of-line part of `force()`, for values that are not
-+     * finished or have failed.
++     * finished or have failed. Never inlined, so that `force()` stays
++     * small at its many call sites.
 +     */
-+    void forceSlow(EvalState & state, PosIdx pos);
++    [[gnu::noinline]] void forceSlow(EvalState & state, PosIdx pos);
 +
      /**
       * Given a thunk that was observed to be in the pending or awaited
       * state, wait for it to finish. Returns the first word of the
+@@ -1296,7 +1316,7 @@ public:
+      * Returns the normal type of a Value. This only returns nThunk if
+      * the Value hasn't been forceValue'd
+      */
+-    inline ValueType type() const
++    [[gnu::always_inline]] inline ValueType type() const
+     {
+         /* Explicit lookup table. switch() might compile down (and it does at least with GCC 14)
+            to a jump table. Let's help the compiler a bit here. */

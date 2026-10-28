@@ -1,7 +1,7 @@
-From 06b6eca4b489728baa8ab98e3596a1680d6aee44 Mon Sep 17 00:00:00 2001
+From b2bb555dc8957e65c4fd7ab7ec954d180da9ab87 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:15:22 +0000
-Subject: [PATCH 05/15] ValueStorage::getInternalType(): avoid a switch
+Subject: [PATCH 07/13] ValueStorage::getInternalType(): avoid a switch
 
 The switch was compiled into an indirect jump through a table, and the
 function wasn't inlined into its hundreds of callers, so every
@@ -13,10 +13,10 @@ force inlining.
  1 file changed, 21 insertions(+), 22 deletions(-)
 
 diff --git a/src/libexpr/include/nix/expr/value.hh b/src/libexpr/include/nix/expr/value.hh
-index 48641cc84..1d98b06bb 100644
+index fe4de5a9f..28adee9df 100644
 --- a/src/libexpr/include/nix/expr/value.hh
 +++ b/src/libexpr/include/nix/expr/value.hh
-@@ -765,29 +765,28 @@ class alignas(16)
+@@ -775,29 +775,28 @@ class alignas(16)
  
  protected:
      /** Get internal type currently occupying the storage. */

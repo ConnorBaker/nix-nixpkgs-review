@@ -1,7 +1,7 @@
-From 8f676671273a4d24708c48f5a3cf524291b976b1 Mon Sep 17 00:00:00 2001
+From 740a8dbe4519779a0365fbe5d05cced350cdbeb3 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:00:23 +0000
-Subject: [PATCH 03/15] ValueStorage::finish(): avoid an atomic exchange for
+Subject: [PATCH 04/13] ValueStorage::finish(): avoid an atomic exchange for
  values that aren't being forced
 
 Copying a value or writing a result into a fresh value or a temporary
@@ -10,14 +10,30 @@ x86-64) to detect waiters, even though only a pending/awaited thunk can
 have waiters. Check the current state with a relaxed load first and use
 a plain release store in the common case.
 ---
- src/libexpr/include/nix/expr/value.hh | 14 ++++++++++++++
- 1 file changed, 14 insertions(+)
+ src/libexpr/include/nix/expr/value.hh | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/src/libexpr/include/nix/expr/value.hh b/src/libexpr/include/nix/expr/value.hh
-index aadb05f62..48641cc84 100644
+index aadb05f62..6d1298c72 100644
 --- a/src/libexpr/include/nix/expr/value.hh
 +++ b/src/libexpr/include/nix/expr/value.hh
-@@ -683,6 +683,20 @@ class alignas(16)
+@@ -42,6 +42,15 @@ enum PrimaryDiscriminator : int {
+     pdPath = 7, // FIXME: get rid of this by ditching the `accessor` field
+ };
+ 
++/**
++ * Whether a value with this discriminator is a thunk that hasn't been evaluated yet (`pdThunk`) or is being evaluated
++ * (`pdPending`, `pdAwaited`), as opposed to a finished value.
++ */
++constexpr bool isUnfinished(PrimaryDiscriminator pd)
++{
++    return pd == pdThunk || pd == pdPending || pd == pdAwaited;
++}
++
+ /**
+  * Internal type discriminator, which is more detailed than `ValueType`, as
+  * it specifies the exact representation used (for types that have multiple
+@@ -683,6 +692,20 @@ class alignas(16)
      {
          // Note: p1 *must* be updated before p0.
          p1 = p1_;
@@ -30,7 +46,7 @@ index aadb05f62..48641cc84 100644
 +           a costly atomic exchange. Since the "pending" state can only
 +           have been set by this thread, this load cannot miss it. */
 +        auto pd0 = static_cast<PrimaryDiscriminator>(p0.load(std::memory_order_relaxed) & discriminatorMask);
-+        if (pd0 != pdPending && pd0 != pdAwaited && pd0 != pdThunk) [[likely]] {
++        if (!isUnfinished(pd0)) [[likely]] {
 +            p0.store(p0_, std::memory_order_release);
 +            return;
 +        }
@@ -38,3 +54,12 @@ index aadb05f62..48641cc84 100644
          p0_ = p0.exchange(p0_, std::memory_order_release);
  
          auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+@@ -924,7 +947,7 @@ protected:
+         auto p0_ = v.p0.load(std::memory_order_acquire);
+         auto p1_ = v.p1; // must be loaded after p0
+         auto pd = static_cast<PrimaryDiscriminator>(p0_ & discriminatorMask);
+-        if (pd == pdThunk || pd == pdPending || pd == pdAwaited)
++        if (isUnfinished(pd))
+             unreachable();
+         finish(p0_, p1_);
+         return *this;

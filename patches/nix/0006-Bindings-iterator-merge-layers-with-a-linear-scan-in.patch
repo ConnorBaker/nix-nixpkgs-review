@@ -1,7 +1,7 @@
-From 380b1e2b9aa855b2cd8a66d3e18d892d49be28be Mon Sep 17 00:00:00 2001
+From b364f0c49e1a352a1543f840a27fdb8cb1e22caf Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:11:18 +0000
-Subject: [PATCH 04/15] Bindings::iterator: merge layers with a linear scan
+Subject: [PATCH 06/13] Bindings::iterator: merge layers with a linear scan
  instead of a heap
 
 A layered attrset has at most 8 layers (usually 2 or 3), so picking the
@@ -10,11 +10,11 @@ binary heap, which in addition was rebuilt with make_heap() on every
 push. The iteration order is unchanged: by symbol, with earlier layers
 overriding later ones.
 ---
- src/libexpr/include/nix/expr/attr-set.hh | 141 +++++------------------
- 1 file changed, 26 insertions(+), 115 deletions(-)
+ src/libexpr/include/nix/expr/attr-set.hh | 146 +++++------------------
+ 1 file changed, 30 insertions(+), 116 deletions(-)
 
 diff --git a/src/libexpr/include/nix/expr/attr-set.hh b/src/libexpr/include/nix/expr/attr-set.hh
-index 4d3821fed..d1a30c113 100644
+index 4d3821fed..e94a3a7f7 100644
 --- a/src/libexpr/include/nix/expr/attr-set.hh
 +++ b/src/libexpr/include/nix/expr/attr-set.hh
 @@ -151,53 +151,20 @@ public:
@@ -58,20 +58,20 @@ index 4d3821fed..d1a30c113 100644
  
 -        using QueueStorageType = boost::container::static_vector<BindingsCursor, maxLayers>;
 -
--        /**
+         /**
 -         * Comparator implementing the override priority / name ordering
 -         * for BindingsCursor.
--         */
--        static constexpr auto comp = std::greater<BindingsCursor>();
--
-         /**
--         * A priority queue used to implement an on-the-fly k-way merge.
 +         * One cursor per non-empty layer, in order of decreasing priority: attributes in earlier layers override
 +         * attributes with the same name in later ones.
 +         *
 +         * Since there are at most `maxLayers` layers, finding the next attribute by scanning all cursors is cheaper
 +         * than maintaining a priority queue.
           */
+-        static constexpr auto comp = std::greater<BindingsCursor>();
+-
+-        /**
+-         * A priority queue used to implement an on-the-fly k-way merge.
+-         */
 -        QueueStorageType cursorHeap;
 +        boost::container::static_vector<BindingsCursor, maxLayers> cursors;
  
@@ -182,7 +182,7 @@ index 4d3821fed..d1a30c113 100644
          }
  
      public:
-@@ -310,19 +222,18 @@ public:
+@@ -310,19 +222,21 @@ public:
          {
              if (!doMerge) {
                  ++current;
@@ -199,14 +199,18 @@ index 4d3821fed..d1a30c113 100644
 -            auto cursor = consumeAllUntilCurrentName();
 -            if (!cursor)
 -                return finished();
-+            /* Every cursor is at a name no smaller than the current one, so skip the current name in all layers. */
+-
+-            next(*cursor);
++            /* Every cursor is at a name no smaller than the current one. In one pass, skip the current name in all
++               layers and select the next one, as `selectNext()` does. */
 +            Symbol name = current->name;
-+            for (auto & cursor : cursors)
++            current = nullptr;
++            for (auto & cursor : cursors) {
 +                while (!cursor.empty() && cursor.current->name == name)
 +                    ++cursor.current;
- 
--            next(*cursor);
-+            selectNext();
++                if (!cursor.empty() && (!current || cursor.current->name < current->name))
++                    current = cursor.current;
++            }
              return *this;
          }
  

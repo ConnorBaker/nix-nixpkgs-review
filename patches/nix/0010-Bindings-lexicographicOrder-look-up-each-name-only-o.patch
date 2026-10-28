@@ -1,7 +1,7 @@
-From 799ef93f3df93145ec3222a5dc575396380b4ad5 Mon Sep 17 00:00:00 2001
+From 32c21c43c2633e106ab7fd3ba0f5197bbb9a9a76 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:24:16 +0000
-Subject: [PATCH 08/15] Bindings::lexicographicOrder(): look up each name only
+Subject: [PATCH 10/13] Bindings::lexicographicOrder(): look up each name only
  once
 
 The comparator resolved both symbols on every comparison, i.e. several
@@ -11,7 +11,7 @@ dependent loads per side. Resolve them once up front instead.
  1 file changed, 10 insertions(+), 6 deletions(-)
 
 diff --git a/src/libexpr/include/nix/expr/attr-set.hh b/src/libexpr/include/nix/expr/attr-set.hh
-index d1a30c113..7dee75890 100644
+index e94a3a7f7..a04f56065 100644
 --- a/src/libexpr/include/nix/expr/attr-set.hh
 +++ b/src/libexpr/include/nix/expr/attr-set.hh
 @@ -4,6 +4,7 @@
@@ -22,16 +22,17 @@ index d1a30c113..7dee75890 100644
  #include <boost/container/static_vector.hpp>
  #include <boost/iterator/function_output_iterator.hpp>
  
-@@ -330,13 +331,16 @@ public:
+@@ -333,13 +334,16 @@ public:
       */
      std::vector<const Attr *> lexicographicOrder(const SymbolTable & symbols) const
      {
 +        /* Look up the names once, rather than twice per comparison. */
-+        boost::container::small_vector<std::pair<std::string_view, const Attr *>, 64> named;
++        using Named = std::pair<std::string_view, const Attr *>;
++        boost::container::small_vector<Named, 64> named;
 +        named.reserve(size());
-+        for (auto & a : *this)
-+            named.emplace_back(symbols[a.name], &a);
-+        std::ranges::sort(named, std::less{}, [](const auto & p) { return p.first; });
++        std::ranges::transform(
++            *this, std::back_inserter(named), [&](const Attr & a) { return Named{symbols[a.name], &a}; });
++        std::ranges::sort(named, {}, &Named::first);
          std::vector<const Attr *> res;
 -        res.reserve(size());
 -        std::ranges::transform(*this, std::back_inserter(res), [](const Attr & a) { return &a; });
@@ -40,8 +41,7 @@ index d1a30c113..7dee75890 100644
 -            return sa < sb;
 -        });
 +        res.reserve(named.size());
-+        for (auto & [_, a] : named)
-+            res.push_back(a);
++        std::ranges::transform(named, std::back_inserter(res), &Named::second);
          return res;
      }
  

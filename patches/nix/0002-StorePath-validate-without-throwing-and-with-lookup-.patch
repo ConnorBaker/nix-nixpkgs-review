@@ -1,0 +1,199 @@
+From 16159576027ed7b6a2607269e8e18388ddab4fd9 Mon Sep 17 00:00:00 2001
+From: Connor Baker <connorbaker01@gmail.com>
+Date: Fri, 9 Oct 2026 00:41:39 +0000
+Subject: [PATCH 02/13] StorePath: validate without throwing, and with lookup
+ tables
+
+Parsing store paths is common during evaluation (e.g. every string
+context element is parsed when strings are concatenated or coerced),
+and the per-character range checks of the hash part and the name took
+about a dozen instructions per character. Check the name's characters
+with a table, and the hash part's with BaseNix32's existing one.
+
+Also add StorePath::isValidBaseName(), which tells whether a base name
+is valid without the cost of throwing an exception: the checks now
+return their errors, and only the constructor and checkName() throw
+them.
+---
+ src/libstore-tests/path.cc             | 17 +++++
+ src/libstore/include/nix/store/path.hh |  5 ++
+ src/libstore/path.cc                   | 86 ++++++++++++++++++--------
+ 3 files changed, 83 insertions(+), 25 deletions(-)
+
+diff --git a/src/libstore-tests/path.cc b/src/libstore-tests/path.cc
+index 4e4f9befe..208e9ab48 100644
+--- a/src/libstore-tests/path.cc
++++ b/src/libstore-tests/path.cc
+@@ -137,6 +137,23 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
+     } catch (const BadStorePath &) {
+     }
+     RC_ASSERT(parsed == std::regex_match(std::string{name}, nameRegex));
++    RC_ASSERT(parsed == StorePath::isValidBaseName("575s52sh487i0ylmbs9pvi606ljdszr0-" + name));
++    RC_ASSERT(parsed == store->maybeParseStorePath(path).has_value());
++}
++
++TEST_F(StorePathTest, hashPartCharacters)
++{
++    std::string_view nix32 = "0123456789abcdfghijklmnpqrsvwxyz";
++    for (int i = 0; i < 256; ++i) {
++        auto c = static_cast<char>(i);
++        std::string baseName = "575s52sh487i0ylmbs9pvi606ljdszr" + std::string(1, c) + "-name";
++        bool valid = nix32.find(c) != nix32.npos;
++        EXPECT_EQ(StorePath::isValidBaseName(baseName), valid) << i;
++        if (valid)
++            EXPECT_NO_THROW(StorePath{baseName}) << i;
++        else
++            EXPECT_THROW(StorePath{baseName}, BadStorePath) << i;
++    }
+ }
+ 
+ TEST_F(StorePathTest, mustBeDashAfterHashPart)
+diff --git a/src/libstore/include/nix/store/path.hh b/src/libstore/include/nix/store/path.hh
+index 74ee0422b..eacf5ed41 100644
+--- a/src/libstore/include/nix/store/path.hh
++++ b/src/libstore/include/nix/store/path.hh
+@@ -44,6 +44,11 @@ public:
+     /** @throws BadStorePath */
+     StorePath(std::string_view baseName);
+ 
++    /**
++     * Whether `StorePath(baseName)` would succeed, without the cost of throwing an exception if it wouldn't.
++     */
++    static bool isValidBaseName(std::string_view baseName);
++
+     /** @throws BadStorePath */
+     StorePath(const Hash & hash, std::string_view name);
+ 
+diff --git a/src/libstore/path.cc b/src/libstore/path.cc
+index e2e53551b..b24c35822 100644
+--- a/src/libstore/path.cc
++++ b/src/libstore/path.cc
+@@ -1,6 +1,10 @@
++#include <array>
++#include <optional>
++
+ #include <nlohmann/json.hpp>
+ 
+ #include "nix/store/store-dir-config.hh"
++#include "nix/util/base-nix-32.hh"
+ #include "nix/util/json-utils.hh"
+ 
+ namespace nix {
+@@ -9,60 +13,92 @@ void BadStorePathName::anchor() {}
+ 
+ void BadStorePath::anchor() {}
+ 
+-void checkName(std::string_view name)
++/**
++ * The characters allowed in store path names (see `nameRegexStr`), as a table, since that is cheaper to look up than
++ * evaluating the condition.
++ */
++static constexpr auto validNameChars = [] {
++    std::array<bool, 256> table{};
++    for (size_t i = 0; i < table.size(); ++i) {
++        auto c = static_cast<char>(i);
++        table[i] = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '+' || c == '-'
++                   || c == '.' || c == '_' || c == '?' || c == '=';
++    }
++    return table;
++}();
++
++/**
++ * Why `name` is not a valid store path name, if it isn't. Returns the error rather than throwing it, since exceptions
++ * are expensive and callers like `StorePath::isValidBaseName()` only want to know whether the name is valid.
++ */
++static std::optional<BadStorePathName> nameError(std::string_view name)
+ {
+     if (name.empty())
+-        throw BadStorePathName("name must not be empty");
++        return BadStorePathName("name must not be empty");
+     if (name.size() > StorePath::MaxPathLen)
+-        throw BadStorePathName("name '%s' must be no longer than %d characters", name, StorePath::MaxPathLen);
++        return BadStorePathName("name '%s' must be no longer than %d characters", name, StorePath::MaxPathLen);
+     // See nameRegexStr for the definition
+     if (name[0] == '.') {
+         // check against "." and "..", followed by end or dash
+         if (name.size() == 1)
+-            throw BadStorePathName("name '%s' is not valid", name);
++            return BadStorePathName("name '%s' is not valid", name);
+         if (name[1] == '-')
+-            throw BadStorePathName(
++            return BadStorePathName(
+                 "name '%s' is not valid: first dash-separated component must not be '%s'", name, ".");
+         if (name[1] == '.') {
+             if (name.size() == 2)
+-                throw BadStorePathName("name '%s' is not valid", name);
++                return BadStorePathName("name '%s' is not valid", name);
+             if (name[2] == '-')
+-                throw BadStorePathName(
++                return BadStorePathName(
+                     "name '%s' is not valid: first dash-separated component must not be '%s'", name, "..");
+         }
+     }
+     for (auto c : name)
+-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '+' || c == '-'
+-              || c == '.' || c == '_' || c == '?' || c == '='))
+-            throw BadStorePathName("name '%s' contains illegal character '%s'", name, c);
++        if (!validNameChars[static_cast<unsigned char>(c)])
++            return BadStorePathName("name '%s' contains illegal character '%s'", name, c);
++    return std::nullopt;
+ }
+ 
+-static void checkPathName(std::string_view path, std::string_view name)
++void checkName(std::string_view name)
+ {
+-    try {
+-        checkName(name);
+-    } catch (BadStorePathName & e) {
+-        throw BadStorePath("path '%s' is not a valid store path: %s", path, Uncolored(e.message()));
+-    }
++    if (auto e = nameError(name))
++        throw std::move(*e);
++}
++
++/**
++ * Why `baseName` can't name a store path, if it can't; see `nameError()`.
++ */
++static std::optional<BadStorePath> baseNameError(std::string_view baseName)
++{
++    if (baseName.size() < StorePath::HashLen + 1)
++        return BadStorePath("'%s' is too short to be a valid store path", baseName);
++    if (baseName[StorePath::HashLen] != '-')
++        return BadStorePath("'%s' can't name a store path because the hash part is not followed by a '-'", baseName);
++    for (auto c : baseName.substr(0, StorePath::HashLen))
++        if (!BaseNix32::lookupReverse(c))
++            return BadStorePath("store path '%s' contains illegal base-32 character '%s'", baseName, c);
++    if (auto e = nameError(baseName.substr(StorePath::HashLen + 1)))
++        return BadStorePath("path '%s' is not a valid store path: %s", baseName, Uncolored(e->message()));
++    return std::nullopt;
++}
++
++bool StorePath::isValidBaseName(std::string_view baseName)
++{
++    return !baseNameError(baseName);
+ }
+ 
+ StorePath::StorePath(std::string_view _baseName)
+     : baseName(_baseName)
+ {
+-    if (baseName.size() < HashLen + 1)
+-        throw BadStorePath("'%s' is too short to be a valid store path", baseName);
+-    if (baseName[HashLen] != '-')
+-        throw BadStorePath("'%s' can't name a store path because the hash part is not followed by a '-'", baseName);
+-    for (auto c : hashPart())
+-        if (c == 'e' || c == 'o' || c == 'u' || c == 't' || !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')))
+-            throw BadStorePath("store path '%s' contains illegal base-32 character '%s'", baseName, c);
+-    checkPathName(baseName, name());
++    if (auto e = baseNameError(baseName))
++        throw std::move(*e);
+ }
+ 
+ StorePath::StorePath(const Hash & hash, std::string_view _name)
+     : baseName((hash.to_string(HashFormat::Nix32, false) + "-").append(std::string(_name)))
+ {
+-    checkPathName(baseName, name());
++    if (auto e = nameError(name()))
++        throw BadStorePath("path '%s' is not a valid store path: %s", baseName, Uncolored(e->message()));
+ }
+ 
+ bool StorePath::isDerivation() const noexcept
