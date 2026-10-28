@@ -1,7 +1,7 @@
-From 4f90492c44e60b27b86443eac15205043ad11014 Mon Sep 17 00:00:00 2001
+From f2f2fe1f5ea7b82db3737b07cbdce0372e4dcc65 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:41:39 +0000
-Subject: [PATCH 12/17] StorePath: validate characters with lookup tables
+Subject: [PATCH 10/15] StorePath: validate characters with lookup tables
 
 Parsing store paths is common during evaluation (e.g. every string
 context element is parsed when strings are concatenated or coerced),

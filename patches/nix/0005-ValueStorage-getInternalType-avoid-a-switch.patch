@@ -1,7 +1,7 @@
-From 3d7d0aed9641b64ac85675caff767ced6c7265df Mon Sep 17 00:00:00 2001
+From 80fc9c1b22a80b900a5e6fb2645e3b5b83da6fdb Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:15:22 +0000
-Subject: [PATCH 05/17] ValueStorage::getInternalType(): avoid a switch
+Subject: [PATCH 05/15] ValueStorage::getInternalType(): avoid a switch
 
 The switch was compiled into an indirect jump through a table, and the
 function wasn't inlined into its hundreds of callers, so every

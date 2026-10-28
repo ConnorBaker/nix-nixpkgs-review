@@ -1,7 +1,7 @@
-From b55de04d128f5e6e47ae0f03f9c3447c9d425d29 Mon Sep 17 00:00:00 2001
+From 0fe35102f156c7b83e4b274faff9243d77be88b1 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:19:36 +0000
-Subject: [PATCH 06/17] SymbolTable::create(): cache recent lookups per thread
+Subject: [PATCH 06/15] SymbolTable::create(): cache recent lookups per thread
 
 Looking up a string in the concurrent symbol set hashes it and takes two
 reader locks (atomic read-modify-writes), and creating symbols from

@@ -1,7 +1,7 @@
-From 225d091a710f93dfbe56538c48b882ca7429e148 Mon Sep 17 00:00:00 2001
+From 2142e691e23d06b0adf1a4bb64da0698abdd52a7 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:38:29 +0000
-Subject: [PATCH 11/17] PosixDirectorySourceAccessor: don't re-insert cached
+Subject: [PATCH 09/15] PosixDirectorySourceAccessor: don't re-insert cached
  directory fds
 
 openParentAndUpsert() upserted the parent directory's fd into the LRU

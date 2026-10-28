@@ -1,7 +1,7 @@
-From 78c7d44afa7c27bc72866441518c0a5beaac2386 Mon Sep 17 00:00:00 2001
+From 75026ed736c968bd13ba28829b9a4d67c70769ea Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 01:00:44 +0000
-Subject: [PATCH 15/17] allocValue(), allocEnv(): don't check if the free list
+Subject: [PATCH 13/15] allocValue(), allocEnv(): don't check if the free list
  has been initialised
 
 The per-thread free lists were held in dynamically initialised

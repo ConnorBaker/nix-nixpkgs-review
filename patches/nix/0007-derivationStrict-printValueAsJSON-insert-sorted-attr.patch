@@ -1,7 +1,7 @@
-From 81ee4502c3897a299b9060fe8e83bd1cbd38a0c7 Mon Sep 17 00:00:00 2001
+From 4e995db79850b04bcb5b86b37b2a0df736bff7cb Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:21:40 +0000
-Subject: [PATCH 07/17] derivationStrict, printValueAsJSON: insert sorted
+Subject: [PATCH 07/15] derivationStrict, printValueAsJSON: insert sorted
  attributes with a hint
 
 Both visit attributes in lexicographic order, so inserting each one at
@@ -13,10 +13,10 @@ tree descent with string comparisons.
  2 files changed, 8 insertions(+), 3 deletions(-)
 
 diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
-index dc13b2138..88badaa2c 100644
+index 8c95e9d1b..b12dc0cb1 100644
 --- a/src/libexpr/primops.cc
 +++ b/src/libexpr/primops.cc
-@@ -1914,7 +1914,9 @@ static void derivationStrictInternal(
+@@ -1947,7 +1947,9 @@ static void derivationStrictInternal(
                      if (i->name == state.s.structuredAttrs)
                          continue;
  
@@ -27,7 +27,7 @@ index dc13b2138..88badaa2c 100644
  
                      switch (i->name.getId()) {
                      case EvalState::s.builder.getId():
-@@ -1988,7 +1990,8 @@ static void derivationStrictInternal(
+@@ -2021,7 +2023,8 @@ static void derivationStrictInternal(
                              drvName);
                          drv.structuredAttrs = StructuredAttrs::parse(s);
                      } else {

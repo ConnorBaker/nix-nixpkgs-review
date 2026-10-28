@@ -1,12 +1,36 @@
-From 3a9454a63de257724e8a8b364f8494f62b275930 Mon Sep 17 00:00:00 2001
-From: Connor Baker <connorbaker01@gmail.com>
-Date: Thu, 8 Oct 2026 20:46:05 +0000
-Subject: [PATCH 01/17] Add fingerprint-derivations setting
+From c1d2dcdfc07dd790a98fb07e114c4a4ff69e4455 Mon Sep 17 00:00:00 2001
+From: Connor Baker <ConnorBaker01@gmail.com>
+Date: Wed, 28 Oct 2026 00:53:31 -0700
+Subject: [PATCH 01/15] Add fingerprint-derivations setting
 
+With `fingerprint-derivations` (only allowed in read-only mode),
+`derivationStrict` doesn't serialise derivations or compute their real
+store paths. Instead, it hashes their fields directly and returns
+fingerprints formatted as store paths: two derivations' fingerprinted
+derivation paths are equal if and only if their real ones would be, and
+likewise for their output paths. That is enough to tell which
+derivations changed between two evaluations made with this setting,
+much more cheaply, but the paths are not real store paths and must
+never be built or compared with real ones.
+
+Fingerprints are computed from one hash of the derivation's fields
+with its outputs masked:
+
+- its hash modulo, as `hashDerivationModulo()` computes it, from that
+  hash and its inputs' hashes modulo (fixed-output derivations use their
+  real hashes modulo, which depend only on their content hashes); its
+  output paths follow from this, as from the real one;
+- its path, from that hash and its inputs' derivation paths.
+
+The fields are collected into one buffer and hashed in one go, rather
+than written to a `HashSink` (which allocates a large buffer and makes a
+virtual call per write), and hashes are hashed again as their raw bytes,
+without encoding them first. Fingerprint store paths are made directly
+from the fingerprints rather than through `makeStorePath()`.
 ---
  src/libexpr/include/nix/expr/eval-settings.hh |  13 +
- src/libexpr/primops.cc                        | 262 +++++++++++++++++-
- 2 files changed, 272 insertions(+), 3 deletions(-)
+ src/libexpr/primops.cc                        | 295 +++++++++++++++++-
+ 2 files changed, 305 insertions(+), 3 deletions(-)
 
 diff --git a/src/libexpr/include/nix/expr/eval-settings.hh b/src/libexpr/include/nix/expr/eval-settings.hh
 index 9d0776139..54e9622a8 100644
@@ -33,14 +57,22 @@ index 9d0776139..54e9622a8 100644
      // currently needed in mountInput().
      Setting<bool> lazyLocks{
 diff --git a/src/libexpr/primops.cc b/src/libexpr/primops.cc
-index ced25790a..dc13b2138 100644
+index ced25790a..8c95e9d1b 100644
 --- a/src/libexpr/primops.cc
 +++ b/src/libexpr/primops.cc
-@@ -1513,6 +1513,259 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
+@@ -1513,6 +1513,292 @@ static void checkDerivationName(EvalState & state, std::string_view drvName)
      }
  }
  
 +namespace {
++
++/**
++ * The bytes of a hash, to be hashed again without encoding them first.
++ */
++std::string rawHash(const Hash & h)
++{
++    return {reinterpret_cast<const char *>(h.hash), h.hashSize};
++}
 +
 +/**
 + * Hashes an unambiguous encoding of values for `fingerprint-derivations`: every variable-length item is prefixed by its
@@ -48,22 +80,26 @@ index ced25790a..dc13b2138 100644
 + */
 +struct FingerprintHasher
 +{
-+    HashSink sink{HashAlgorithm::SHA256};
++    /**
++     * The data to hash. Collecting it and hashing it in one go is cheaper than writing each field to a `HashSink`,
++     * which allocates a large buffer and makes a virtual call per write.
++     */
++    std::string data;
 +
 +    void num(uint64_t n)
 +    {
-+        sink({reinterpret_cast<const char *>(&n), sizeof(n)});
++        data.append(reinterpret_cast<const char *>(&n), sizeof(n));
 +    }
 +
 +    void str(std::string_view s)
 +    {
 +        num(s.size());
-+        sink(s);
++        data.append(s);
 +    }
 +
 +    void hash(const Hash & h)
 +    {
-+        str({reinterpret_cast<const char *>(h.hash), h.hashSize});
++        str(rawHash(h));
 +    }
 +
 +    /**
@@ -132,9 +168,31 @@ index ced25790a..dc13b2138 100644
 +
 +    Hash finish()
 +    {
-+        return sink.finish().hash;
++        return hashString(HashAlgorithm::SHA256, data);
 +    }
 +};
++
++/**
++ * A store path that is a fingerprint: like the paths made by `StoreDirConfig::makeStorePath()`, but without hashing the
++ * (already unambiguous) fingerprint again.
++ */
++StorePath fingerprintStorePath(const Hash & fingerprint, std::string_view name)
++{
++    return StorePath(compressHash(fingerprint, 20), name);
++}
++
++/**
++ * The fingerprint of an output path, as `StoreDirConfig::makeOutputPath()` computes the real one from the hash modulo
++ * of a derivation.
++ */
++StorePath fingerprintOutputPath(const Hash & hashModulo, std::string_view outputName, std::string_view drvName)
++{
++    FingerprintHasher h;
++    h.str("output");
++    h.hash(hashModulo);
++    h.str(outputName);
++    return fingerprintStorePath(h.finish(), outputPathName(drvName, outputName));
++}
 +
 +} // namespace
 +
@@ -239,8 +297,7 @@ index ced25790a..dc13b2138 100644
 +                    overloaded{
 +                        [&](const DrvHashModulo::DeferredDrv &) { return true; },
 +                        [&](const DrvHashModulo::DrvHash & h) {
-+                            inputs2[h.to_string(HashFormat::Base16, false)].insert(
-+                                node.value.begin(), node.value.end());
++                            inputs2[rawHash(h)].insert(node.value.begin(), node.value.end());
 +                            return false;
 +                        },
 +                        [&](const DrvHashModulo::CaOutputHashes & outputHashes) {
@@ -248,7 +305,7 @@ index ced25790a..dc13b2138 100644
 +                                auto h = get(outputHashes, outputName);
 +                                if (!h)
 +                                    throw Error("no hash for output '%s' of derivation '%s'", outputName, drv.name);
-+                                inputs2[h->to_string(HashFormat::Base16, false)].insert("out");
++                                inputs2[rawHash(*h)].insert("out");
 +                            }
 +                            return false;
 +                        },
@@ -275,7 +332,7 @@ index ced25790a..dc13b2138 100644
 +        for (auto & [outputName, output] : drv.outputs)
 +            if (std::holds_alternative<DerivationOutput::Deferred>(output.raw))
 +                output = DerivationOutput::InputAddressed{
-+                    .path = state.store->makeOutputPath(outputName, *h, drv.name),
++                    .path = fingerprintOutputPath(*h, outputName, drv.name),
 +                };
 +
 +    FingerprintHasher path;
@@ -286,7 +343,7 @@ index ced25790a..dc13b2138 100644
 +        path.str(drvPath.to_string());
 +        path.childNode(node);
 +    }
-+    auto drvPath = state.store->makeStorePath("fingerprint", path.finish(), std::string(drv.name) + drvExtension);
++    auto drvPath = fingerprintStorePath(path.finish(), std::string(drv.name) + drvExtension);
 +
 +    drvHashes.insert_or_assign(drvPath, std::move(hashModulo));
 +
@@ -296,7 +353,7 @@ index ced25790a..dc13b2138 100644
  static void derivationStrictInternal(
      EvalState & state,
      std::string_view drvName,
-@@ -1912,14 +2165,17 @@ static void derivationStrictInternal(
+@@ -1912,14 +2198,17 @@ static void derivationStrictInternal(
              drv.outputs.insert_or_assign(i, DerivationOutput::Deferred{});
          }
  
@@ -316,7 +373,7 @@ index ced25790a..dc13b2138 100644
      auto drvPathS = state.store->printStorePath(drvPath);
  
      printMsg(lvlChatty, "instantiated '%1%' -> '%2%'", drvName, drvPathS);
-@@ -1927,7 +2183,7 @@ static void derivationStrictInternal(
+@@ -1927,7 +2216,7 @@ static void derivationStrictInternal(
      /* Optimisation, but required in read-only mode! because in that
         case we don't actually write store derivations, so we can't
         read them later. */

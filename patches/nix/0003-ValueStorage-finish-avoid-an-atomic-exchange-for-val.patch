@@ -1,7 +1,7 @@
-From 7c49a6f2046a3d2f93f21648ff459ce908f3ace2 Mon Sep 17 00:00:00 2001
+From 7c0bfce6fd674dc07b0cbff07ab2686273dccb9e Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:00:23 +0000
-Subject: [PATCH 03/17] ValueStorage::finish(): avoid an atomic exchange for
+Subject: [PATCH 03/15] ValueStorage::finish(): avoid an atomic exchange for
  values that aren't being forced
 
 Copying a value or writing a result into a fresh value or a temporary
