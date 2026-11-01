@@ -81,6 +81,30 @@
           lib.listToAttrs
         ];
 
+      # The patched Nix (see `hydraJobs.determinate-nix`), in each of nix-optimization's variants.
+      patchedNixVariants =
+        system:
+        inputs.nix-optimization.lib.mkOptimizedVariants {
+          inherit system;
+          profileWorkloads = [
+            [
+              "nixpkgs"
+              "parallel"
+            ]
+          ];
+          patches = lib.pipe (builtins.readDir ./patches/nix) [
+            lib.attrNames
+            (lib.filter (lib.hasSuffix ".patch"))
+            (map (name: ./patches/nix + "/${name}"))
+          ];
+          extraProfileEvalArgs = [
+            "--option"
+            "fingerprint-derivations"
+            "true"
+          ];
+          enableGC = false;
+        };
+
       concatMapCartesianProductToAttrs =
         f:
         lib.flip lib.pipe [
@@ -229,6 +253,43 @@
               }
             ) config.diffs
             // {
+              default = config.packages.nnr;
+
+              # What changed between two revisions of a git repository (see README.md and nnr.py).
+              nnr = pkgs.writeShellApplication {
+                name = "nnr";
+                runtimeInputs = [
+                  pkgs.git
+                  pkgs.jq
+                ];
+                runtimeEnv = {
+                  # What a report's expression imports (not all of this repository, so editing e.g. the README doesn't
+                  # invalidate cached reports).
+                  NNR_SRC = lib.fileset.toSource {
+                    root = ./.;
+                    fileset = lib.fileset.unions [
+                      ./configs
+                      ./diff.jq
+                      ./mkNestedReport.nix
+                      ./overlays
+                      ./skip.nix
+                    ];
+                  };
+                  # The Hydra jobsets' Nix on x86_64-linux. Elsewhere, the same patched Nix without the (long) profiling
+                  # pipeline.
+                  NNR_NIX =
+                    let
+                      variants = patchedNixVariants system;
+                    in
+                    "${
+                      if system == "x86_64-linux" then variants.cs-pgo-bolt.nix-cli else variants.baseline.nix-cli
+                    }/bin/nix";
+                };
+                text = ''
+                  exec ${lib.getExe pkgs.python3} -I ${./nnr.py} "$@"
+                '';
+              };
+
               # Finds the attribute paths to add to ./skip.nix for a Nixpkgs tree: builds a tests report, and while
               # evaluating it fails (see mkReport.nix's `error` output), skips the attribute path it failed at and builds
               # it again. Each round evaluates Nixpkgs, so it takes a while.
@@ -330,27 +391,7 @@
       # It is built without Boehm GC: reports never collect anyway (see mkReport.nix), so the evaluator bump-allocates
       # from per-thread chunks instead, which took ~7% fewer cycles and 2.5G less memory (24G peak).
       flake.hydraJobs.determinate-nix = lib.genAttrs [ "x86_64-linux" ] (
-        system:
-        (inputs.nix-optimization.lib.mkOptimizedVariants {
-          inherit system;
-          profileWorkloads = [
-            [
-              "nixpkgs"
-              "parallel"
-            ]
-          ];
-          patches = lib.pipe (builtins.readDir ./patches/nix) [
-            lib.attrNames
-            (lib.filter (lib.hasSuffix ".patch"))
-            (map (name: ./patches/nix + "/${name}"))
-          ];
-          extraProfileEvalArgs = [
-            "--option"
-            "fingerprint-derivations"
-            "true"
-          ];
-          enableGC = false;
-        }).cs-pgo-bolt.nix-cli
+        system: (patchedNixVariants system).cs-pgo-bolt.nix-cli
       );
 
       partitionedAttrs = {

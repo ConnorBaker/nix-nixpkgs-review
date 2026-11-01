@@ -17,6 +17,9 @@
   # it), e.g. { bashNonInteractive.passthru.tests.withChecks = true; }. Skipped attributes are null in the report. See
   # ./skip.nix.
   skip ? { },
+  # Whether to recurse into every attribute set that isn't a derivation, not just those with `recurseForDerivations`
+  # (like nix-eval-jobs' --force-recurse), e.g. for a Hydra jobset (release.nix), which doesn't set it.
+  forceRecurse ? false,
 }:
 assert builtins.elem kind [
   "packages"
@@ -64,7 +67,7 @@ let
         (if kind == "packages" then value.outPath else "derivation")
       # 1b. value is an attribute set but not a derivation, so either we want to recurse into it or we don't
       else
-        value.recurseForDerivations or false
+        forceRecurse || value.recurseForDerivations or false
     # 2. value is not an attribute set, we want to ignore it, return false
     else
       false;
