@@ -11,6 +11,8 @@
   # as does `home-assistant`: with tests, they made the report 12x larger. Each is still recorded once, as
   # `home-assistant.passthru.tests.components.<component>`.
   home-assistant-component-tests = true;
+  # The same packages, as `pkgs.tests` has them.
+  tests.home-assistant-components = true;
 
   # function 'anonymous lambda' called with unexpected argument 'passthru' (pkgs/build-support/fetchurl/boot.nix)
   bashNonInteractive.passthru.tests.withChecks = true;
