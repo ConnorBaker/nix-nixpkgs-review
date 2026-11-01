@@ -185,48 +185,134 @@
           # TODO: Create a review shell or something so that with failing derivations I can do `nix why-depends` with
           # the derivation and the review shell and see how the dependency is being brought in (e.g., directly or
           # transitively).
-          packages = lib.mapAttrs' (
-            name: diff:
-            let
-              name' = "review-${name}";
-              packageSetAttrPath = "packageSets.${system}.${lib.removePrefix "report-" diff.reportPost.name}";
-            in
-            {
-              name = name';
-              # NOTE: These scripts won't capture being run with --override-input since it doesn't change the committed lockfile.
-              # TODO: What if we forwarded all arguments the script received and used them to build diff and everything else
-              # with those arguments?
-              # Ideally having the reference through inputs.self.outPath and inputs.self.narHash would be enough if, when
-              # --override-input is used, a new store path entry with a new flake lockfile is created; if that's not the case,
-              # need to think of something else.
-              # Unfortunately, that doesn't seem to be the case.
-              # Consider the case where we do forward the arguments and do override-input in the script --
-              # what if the inputs are unlocked? If evaluation of the diff takes long enough, by the time
-              # we're running `nix build`, the unlocked inputs could have changed and been fetched again.
-              # TODO: Sometimes I get errors about the nix store path in flakeRef not existing and being incapable of being built.
-              # Maybe something to do with lazy-trees?
-              value = pkgs.writeShellScriptBin name' ''
-                echo "added derivations: $(${lib.getExe pkgs.jq} < ${diff} '.added | length')"
-                ${lib.getExe pkgs.jq} --raw-output '.added[] | join(".")' < ${diff}
-                echo
+          packages =
+            lib.mapAttrs' (
+              name: diff:
+              let
+                name' = "review-${name}";
+                packageSetAttrPath = "packageSets.${system}.${lib.removePrefix "report-" diff.reportPost.name}";
+              in
+              {
+                name = name';
+                # NOTE: These scripts won't capture being run with --override-input since it doesn't change the committed lockfile.
+                # TODO: What if we forwarded all arguments the script received and used them to build diff and everything else
+                # with those arguments?
+                # Ideally having the reference through inputs.self.outPath and inputs.self.narHash would be enough if, when
+                # --override-input is used, a new store path entry with a new flake lockfile is created; if that's not the case,
+                # need to think of something else.
+                # Unfortunately, that doesn't seem to be the case.
+                # Consider the case where we do forward the arguments and do override-input in the script --
+                # what if the inputs are unlocked? If evaluation of the diff takes long enough, by the time
+                # we're running `nix build`, the unlocked inputs could have changed and been fetched again.
+                # TODO: Sometimes I get errors about the nix store path in flakeRef not existing and being incapable of being built.
+                # Maybe something to do with lazy-trees?
+                value = pkgs.writeShellScriptBin name' ''
+                  echo "added derivations: $(${lib.getExe pkgs.jq} < ${diff} '.added | length')"
+                  ${lib.getExe pkgs.jq} --raw-output '.added[] | join(".")' < ${diff}
+                  echo
 
-                echo "changed derivations: $(${lib.getExe pkgs.jq} < ${diff} '.changed | length')"
-                ${lib.getExe pkgs.jq} --raw-output '.changed[] | join(".")' < ${diff}
-                echo
+                  echo "changed derivations: $(${lib.getExe pkgs.jq} < ${diff} '.changed | length')"
+                  ${lib.getExe pkgs.jq} --raw-output '.changed[] | join(".")' < ${diff}
+                  echo
 
-                echo "building added and changed derivations"
-                # Quote each attribute name, since some contain dots.
-                ${lib.getExe pkgs.jq} \
-                  --raw-output \
-                  '(.added + .changed)[] | ".#${packageSetAttrPath}." + (map(tojson) | join("."))' \
-                  < ${diff} | \
-                nix build \
-                  --keep-going \
-                  --no-link \
-                  --stdin
-              '';
-            }
-          ) config.diffs;
+                  echo "building added and changed derivations"
+                  # Quote each attribute name, since some contain dots.
+                  ${lib.getExe pkgs.jq} \
+                    --raw-output \
+                    '(.added + .changed)[] | ".#${packageSetAttrPath}." + (map(tojson) | join("."))' \
+                    < ${diff} | \
+                  nix build \
+                    --keep-going \
+                    --no-link \
+                    --stdin
+                '';
+              }
+            ) config.diffs
+            // {
+              # Finds the attribute paths to add to ./skip.nix for a Nixpkgs tree: builds a tests report, and while
+              # evaluating it fails (see mkReport.nix's `error` output), skips the attribute path it failed at and builds
+              # it again. Each round evaluates Nixpkgs, so it takes a while.
+              find-skips = pkgs.writeShellApplication {
+                name = "find-skips";
+                runtimeInputs = [ pkgs.jq ];
+                text = ''
+                  usage() {
+                    echo "usage: find-skips [--cuda] [--system <system>] --nix <Determinate Nix> <nixpkgs>" >&2
+                    echo "  --nix: the Nix to evaluate with (a store path), e.g. the output of" >&2
+                    echo "    nix build .#hydraJobs.determinate-nix.x86_64-linux" >&2
+                    echo "  or a stock Determinate Nix" >&2
+                    exit 2
+                  }
+
+                  withCUDA=false
+                  evalSystem=${system}
+                  evalNix=
+                  nixpkgs=
+                  while (( $# > 0 )); do
+                    case "$1" in
+                      --cuda) withCUDA=true ;;
+                      --system) evalSystem=$2; shift ;;
+                      --nix) evalNix=$(realpath "$2"); shift ;;
+                      -*) usage ;;
+                      *) [[ -z "$nixpkgs" ]] || usage; nixpkgs=$(realpath "$1") ;;
+                    esac
+                    shift
+                  done
+                  [[ -n "$nixpkgs" && -n "$evalNix" ]] || usage
+
+                  skip=$(nix eval --json --file ${./skip.nix})
+                  found='[]'
+                  while true; do
+                    echo "find-skips: building a tests report with $(jq length <<< "$found") new skip(s)" >&2
+                    # --eval-store auto: `--nix` is a path in the store builds use, which builtins.storePath must find even if
+                    # evaluation is configured to use another store.
+                    error=$(
+                      nix build --no-link --print-out-paths --impure --eval-store auto \
+                        --argstr nixpkgs "$nixpkgs" --argstr evalSystem "$evalSystem" --argstr evalNix "$evalNix" \
+                        --argstr withCUDA "$withCUDA" --argstr skip "$(jq --compact-output --argjson found "$found" 'reduce $found[] as $p (.; setpath($p; true))' <<< "$skip")" \
+                        --expr '
+                          { nixpkgs, evalSystem, evalNix, withCUDA, skip }:
+                          let
+                            pkgs = import ${inputs.nixpkgs} { system = "${system}"; };
+                          in
+                          (pkgs.callPackage ${./.}/mkReport.nix {
+                            name = "find-skips-tests-report";
+                            nixpkgs = builtins.path { path = nixpkgs; name = "source"; };
+                            inherit evalSystem;
+                            withCA = false;
+                            withCUDA = withCUDA == "true";
+                            reportKind = "tests";
+                            skip = builtins.fromJSON skip;
+                            nix = builtins.storePath evalNix;
+                          }).error
+                        '
+                    )
+                    attrPath=$(jq --compact-output .attrPath "$error" 2> /dev/null || echo null)
+                    if [[ "$(< "$error")" == null ]]; then
+                      break
+                    elif [[ "$attrPath" == null ]]; then
+                      echo "find-skips: evaluating tests failed, but the trace doesn't start with an attribute path:" >&2
+                      jq --raw-output .error "$error" >&2
+                      exit 1
+                    elif jq --exit-status --argjson p "$attrPath" 'index([$p]) != null' <<< "$found" > /dev/null; then
+                      echo "find-skips: skipping $attrPath didn't help:" >&2
+                      jq --raw-output .error "$error" >&2
+                      exit 1
+                    fi
+                    echo "find-skips: skipping $attrPath: $(jq --raw-output '.error | split("\n") | map(select(test("^ *error: "))) | last // "?"' "$error")" >&2
+                    found=$(jq --compact-output --argjson p "$attrPath" '. + [$p]' <<< "$found")
+                  done
+
+                  echo "find-skips: tests evaluate with $(jq length <<< "$found") new skip(s); add these to skip.nix:" >&2
+                  # As Nix attribute paths, quoting names that aren't identifiers (or are keywords).
+                  jq --raw-output '
+                    def nixName:
+                      if test("^[A-Za-z_][A-Za-z0-9_-]*$") and (IN("assert", "else", "if", "in", "inherit", "let", "or", "rec", "then", "with") | not) then . else tojson end;
+                    .[] | "  " + (map(nixName) | join(".")) + " = true;"
+                  ' <<< "$found"
+                '';
+              };
+            };
         };
 
       # The Nix used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
