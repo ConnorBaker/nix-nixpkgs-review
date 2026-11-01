@@ -1,4 +1,4 @@
-From 32c21c43c2633e106ab7fd3ba0f5197bbb9a9a76 Mon Sep 17 00:00:00 2001
+From cc625e0a0aa5666ae05cfd8dc9603d9ecf5267ac Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:24:16 +0000
 Subject: [PATCH 10/13] Bindings::lexicographicOrder(): look up each name only

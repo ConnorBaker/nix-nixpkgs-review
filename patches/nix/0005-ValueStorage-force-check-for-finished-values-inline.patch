@@ -1,4 +1,4 @@
-From 216379799b787f71d0d759876bcce8bb4a52f935 Mon Sep 17 00:00:00 2001
+From f406fde59ca3230a20d45bc3aa87978d9e8ea651 Mon Sep 17 00:00:00 2001
 From: Connor Baker <ConnorBaker01@gmail.com>
 Date: Wed, 28 Oct 2026 07:53:17 -0700
 Subject: [PATCH 05/13] ValueStorage::force(): check for finished values inline

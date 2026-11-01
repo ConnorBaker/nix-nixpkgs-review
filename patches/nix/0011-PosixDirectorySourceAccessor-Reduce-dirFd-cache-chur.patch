@@ -1,4 +1,4 @@
-From 11b2c58e288a8c38d3c5fe42bcd0c44eb872e8cd Mon Sep 17 00:00:00 2001
+From 4a097ec5aa7a755e017cb5c5f181c44554ec9f42 Mon Sep 17 00:00:00 2001
 From: Evan <evanev7@gmail.com>
 Date: Fri, 4 Sep 2026 17:20:56 +0100
 Subject: [PATCH 11/13] PosixDirectorySourceAccessor: Reduce dirFd cache churn

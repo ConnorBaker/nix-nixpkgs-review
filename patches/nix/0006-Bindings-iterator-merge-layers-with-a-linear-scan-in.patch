@@ -1,4 +1,4 @@
-From b364f0c49e1a352a1543f840a27fdb8cb1e22caf Mon Sep 17 00:00:00 2001
+From 760eccaf2ee13c98e28383ddbd39330bbd3cfaf7 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:11:18 +0000
 Subject: [PATCH 06/13] Bindings::iterator: merge layers with a linear scan

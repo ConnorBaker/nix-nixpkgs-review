@@ -1,4 +1,4 @@
-From 16159576027ed7b6a2607269e8e18388ddab4fd9 Mon Sep 17 00:00:00 2001
+From cd85dbd6aa04895ccfc69d8d922e9944d2b325b9 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:41:39 +0000
 Subject: [PATCH 02/13] StorePath: validate without throwing, and with lookup
@@ -21,10 +21,10 @@ them.
  3 files changed, 83 insertions(+), 25 deletions(-)
 
 diff --git a/src/libstore-tests/path.cc b/src/libstore-tests/path.cc
-index 4e4f9befe..208e9ab48 100644
+index 1be2abf8a..71089a1a1 100644
 --- a/src/libstore-tests/path.cc
 +++ b/src/libstore-tests/path.cc
-@@ -137,6 +137,23 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
+@@ -141,6 +141,23 @@ RC_GTEST_FIXTURE_PROP(StorePathTest, prop_check_regex_eq_parse, ())
      } catch (const BadStorePath &) {
      }
      RC_ASSERT(parsed == std::regex_match(std::string{name}, nameRegex));

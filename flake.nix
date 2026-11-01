@@ -7,8 +7,9 @@
       inputs.nixpkgs-lib.follows = "nixpkgs";
     };
 
+    # Determinate Nix's main branch (locked in flake.lock); ./patches/nix are rebased onto the locked commit.
     nix = {
-      url = "github:DeterminateSystems/nix-src/v3.24.1";
+      url = "github:DeterminateSystems/nix-src";
       inputs = {
         nixpkgs-regression.follows = "";
         nixpkgs-23-11.follows = "";

@@ -1,4 +1,4 @@
-From d7254b74cf6fc3a15e53046b1c8a4b8528be856d Mon Sep 17 00:00:00 2001
+From 01bfffae2f75fdfc9eb750574cacc9fba1257fb3 Mon Sep 17 00:00:00 2001
 From: Connor Baker <ConnorBaker01@gmail.com>
 Date: Wed, 28 Oct 2026 00:53:31 -0700
 Subject: [PATCH 01/13] Add fingerprint-derivations setting

@@ -1,4 +1,4 @@
-From 4ac9a4fcba38a2adac259016b13a4ee6a9c47d2d Mon Sep 17 00:00:00 2001
+From fbfabc237c3e0e4a51bde6962b1dbd4e325ba826 Mon Sep 17 00:00:00 2001
 From: Connor Baker <connorbaker01@gmail.com>
 Date: Fri, 9 Oct 2026 00:42:42 +0000
 Subject: [PATCH 12/13] builtins.any, builtins.all: don't build error context
