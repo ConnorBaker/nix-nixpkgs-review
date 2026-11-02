@@ -7,8 +7,8 @@ the results. It doesn't instantiate or build anything to do so.
   (`nix eval --store dummy:// --eval-cores 0`). It records the output path of every derivation Nixpkgs exposes for
   building, nested the way Nixpkgs is.
 - `mkDiff.nix` compares two reports and lists the attribute paths added, changed and removed.
-- `nnr` does the same from the command line, for two revisions of any git repository and any entry point (see
-  [`nnr`](#nnr-what-changed-in-a-git-repository)).
+- `lib.mkReview` builds the diff between two revisions of a git repository from those, and `nnr` is its command line
+  (see [`nnr`](#nnr-what-changed-in-a-git-repository)).
 - `hydraJobs.determinate-nix` is a patched Determinate Nix optimized with CSPGO and BOLT. A report takes about half
   the instructions with it (see [Patched Nix](#patched-nix)).
 
@@ -143,18 +143,21 @@ changed = let d = lib.importJSON diff; in d.added ++ d.changed;
 | Argument | Meaning |
 |---|---|
 | `name` | The derivation's name. |
-| `nixpkgs` | The Nixpkgs tree to evaluate (a path or store path). |
+| `nixpkgs` | The tree to evaluate (a path or store path): Nixpkgs, or, with `file`, any tree. |
 | `evalSystem` | The `system` to import Nixpkgs for. It doesn't need to match the builder's system. |
 | `withCA`, `withCUDA` | Passed to `nixpkgsArgs`. |
 | `nixpkgsArgs` | Optional. A Nix file whose expression is a function from `{ withCA, withCUDA }` to the arguments to import Nixpkgs with (other than `system`). It is copied to the store on its own, so it can't refer to files outside it. Defaults to `./configs` and `./overlays` (see below). |
 | `fingerprintDerivations` | Optional, default `false`. Pass `--option fingerprint-derivations true`. Only `hydraJobs.determinate-nix` has this setting. The output paths are then fingerprints: equal exactly when the real paths are equal, but only comparable with reports made the same way. |
 | `reportKind` | Optional, default `"packages"`. `"packages"` or `"tests"` (see above). |
 | `skip` | Optional. What not to evaluate (see [Skipping tests](#skipping-tests)). Defaults to `import ./skip.nix` for a tests report, and to nothing for a packages report. |
+| `file`, `args`, `attrPath` | Optional. What to evaluate in a tree that isn't Nixpkgs, as nix-eval-jobs does: a Nix file in the tree, which, if it's a function taking an attribute set, is called with the attributes of `args` it takes, and an attribute path to select (also for Nixpkgs). `args` is passed as JSON, so its values must be JSON values or paths. |
+| `forceRecurse` | Optional, default `false`. Recurse into every attribute set, not just those with `recurseForDerivations` (e.g. for a Hydra jobset). |
 | `nix` | The Nix to evaluate with. It must be a Determinate Nix: the evaluation uses `--eval-cores`, `--lazy-trees` and the `parallel-eval` feature, which upstream Nix doesn't have. |
 
 The result has `evalSystem`, `nixpkgs`, `reportKind`, `skip`, `withCA` and `withCUDA` in `passthru`, and a tests report
 has an `error` output (see [Skipping tests](#skipping-tests)). `mkDiff.nix` takes `name`, the packages reports
-`reportPre` and `reportPost`, and optionally the tests reports `testsPre` and `testsPost` (both or neither).
+`reportPre` and `reportPost`, optionally the tests reports `testsPre` and `testsPost` (both or neither), and
+`requireTests`, to fail with the tests reports' errors rather than compare only packages when one didn't evaluate.
 
 Things to keep in mind:
 
@@ -210,70 +213,44 @@ missing in 26 rounds (25 minutes, when each round evaluated Nixpkgs twice).
 
 ## `nnr`: what changed in a git repository
 
-`nnr` is like nixpkgs-review crossed with nix-eval-jobs. Run it in a git repository, and it evaluates an entry point at two
-revisions and prints the attribute paths of the derivations added, changed and removed:
+`lib.mkReview` is the diff between two trees of a git repository: it reads each with `builtins.fetchGit`, makes their
+reports with `mkReport.nix`, as a Hydra jobset does, and diffs them with `mkDiff.nix`. `nnr` (the flake's default
+package) is its command line: it resolves the revisions with git, builds the diff and prints it. Like nixpkgs-review,
+but for any tree and entry point, like nix-eval-jobs:
 
 ```bash
 # HEAD^ against HEAD, in a Nixpkgs checkout:
 nix run github:ConnorBaker/nix-nixpkgs-review -- .
 
-# The working tree (uncommitted changes) against HEAD, with passthru.tests:
+# HEAD against the working tree (uncommitted changes), with passthru.tests:
 nix run github:ConnorBaker/nix-nixpkgs-review -- . --uncommitted --tests
 
-# Any two revisions, with CUDA, as JSON (mkDiff.nix's format):
+# Any two revisions, with CUDA, as JSON (mkDiff.nix's output):
 nix run github:ConnorBaker/nix-nixpkgs-review -- . --base origin/master --head my-branch --cuda --json
 
-# Another repository's entry point, as with nix-eval-jobs:
-nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --arg nixpkgs '<expr>' --force-recurse
+# Another repository's entry point:
+nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --argstr system x86_64-linux --force-recurse
 ```
 
-What it compares:
-
-- `--base` (default `HEAD^`) against `--head` (default `HEAD`), or, with `--uncommitted`, `--base` (default `HEAD`)
-  against the working tree. The working tree is what a flake sees in a dirty tree: tracked files as they are on disk,
-  and new files only once staged (`git add -N` is enough).
-- Each tree is read with `builtins.fetchGit` from the repository itself, so nothing is checked out or copied to the
-  store. The paths a tree gives are the same wherever it is.
-
-What it evaluates (the entry point):
-
-- By default, Nixpkgs, if the tree has `pkgs/top-level/all-packages.nix`. It is configured as the flake's reports are
-  (`./configs` and `./overlays`), for this system or `--system`, with `--cuda` and `--ca`.
-- Otherwise, a file (`-f`, default `default.nix`, relative to the repository's root), or `-E`, a function from the tree
-  to what to evaluate (e.g. `-E 'src: (import src { }).pkgsCross.aarch64-multiplatform'`). As with `nix-build` and
-  nix-eval-jobs, a function taking an attribute set is called with the `--arg` and `--argstr` arguments it takes, and
-  `-A` selects an attribute path.
-- Like a report, it only recurses into attribute sets with `recurseForDerivations`, unless given `--force-recurse` (e.g.
-  for a Hydra jobset, which doesn't set it).
-
-How:
-
-- It evaluates with the patched Nix: `hydraJobs.determinate-nix` on x86_64-linux and, elsewhere, the same patches
-  without profiles (nix-optimization's `baseline` variant), or `--nix`. The evaluation is `mkReport.nix`'s (read-only,
-  on a dummy store, on every core), run on the host rather than in a derivation, with an empty `nix.conf`: the
-  user's stores (e.g. an `eval-store`) and plugins aren't used.
-- Reports are cached in `~/.cache/nix-nixpkgs-review/reports`, keyed by the commit (or the working tree's contents),
-  the entry point, the Nix and this repository's Nix files. Comparing a branch's commits one after another evaluates
-  each only once.
-- The diff is mkDiff.nix's (`diff.jq`).
-
-With `--tests`, it also compares each derivation's `passthru.tests`, as tests reports do (see [Skipping
-tests](#skipping-tests)). A test can fail to evaluate in a way `tryEval` can't catch, failing the whole report. `nnr`
-then does what `find-skips` does: it skips the attribute path the evaluation failed at and evaluates again, up to
-`--max-skips` (default 50) times. Both trees skip the same paths, so a skipped test can't show up as added or removed.
-At the end, it prints what it skipped, for a skip file (`--skip`, default `./skip.nix` for Nixpkgs). Each round
-evaluates every test, so the first run on a tree `skip.nix` wasn't made for can take a while. Failures are cached, so
-running it again resumes where it stopped.
-
-For a Nixpkgs checkout on aarch64-linux (20 cores), a packages report (92,692 derivations) took 21–24s, with a peak RSS of
-26.7 GB, with the `baseline` Nix. With one revision cached, comparing it with another took 24s.
-
-Limitations:
-
-- The trees are read from the repository with a dummy store, so an entry point that fetches anything (e.g.
-  `fetchTarball`, or flake inputs) or uses import-from-derivation can't be evaluated. Pass what it needs with `--arg`,
-  e.g. `--arg nixpkgs '(builtins.fetchGit { url = "file:///path/to/nixpkgs"; rev = "…"; })'`.
-- It doesn't build anything: build what it lists with `nix build`.
+- **What it compares:** `--base` (default `HEAD^`) and `--head` (default `HEAD`), or, with `--uncommitted`, `--base`
+  (default `HEAD`) and the working tree, as `builtins.fetchGit` sees it (as a flake sees a dirty tree): tracked files as
+  they are on disk, and new files only once staged (`git add -N` is enough).
+- **What it evaluates:** Nixpkgs, if the tree has `pkgs/top-level/all-packages.nix`, configured as the flake's reports
+  are (`./configs` and `./overlays`, with `--system`, `--cuda` and `--ca`). Otherwise `default.nix`, or `-f`, called with
+  `--arg` and `--argstr`. `-A` and `--force-recurse` work for both. These are `mkReport.nix`'s `file`, `args`,
+  `attrPath` and `forceRecurse`.
+- **With what:** the patched Nix, built with CSPGO and BOLT for the system it runs on (on x86_64-linux, that's
+  `hydraJobs.determinate-nix`), with fingerprints.
+- **Reuse:** a report's derivation depends only on its tree and the settings (it's named after the commit, e.g.
+  `report-packages-e58dcdca81f2`), so a commit's reports are built once and reused by every diff with it, until
+  garbage-collected.
+- **Memory:** each report evaluates on every core and takes tens of GB, so `nnr` builds with `--max-jobs 1`. On
+  aarch64-linux (20 cores), a Nixpkgs packages report (92,692 derivations) took 11.7–15.6s, with a peak RSS of 25.3 GB.
+- **Tests:** with `--tests`, it also compares `passthru.tests` (skipping `skip.nix`'s entries). If a tests report doesn't
+  evaluate, the diff fails with its error and the attribute path it failed at (see [Skipping tests](#skipping-tests)).
+- **Limitations:** reports evaluate in a sandbox, on a dummy store, so an entry point that fetches anything (e.g.
+  `fetchTarball`, or flake inputs) or uses import-from-derivation fails. `--arg` values reach the evaluation as JSON,
+  so they can only be JSON values or paths, e.g. `--arg nixpkgs ~/src/nixpkgs`. `nnr` doesn't build what it lists.
 
 ## The flake's pull request outputs
 

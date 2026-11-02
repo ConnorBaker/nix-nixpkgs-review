@@ -255,39 +255,14 @@
             // {
               default = config.packages.nnr;
 
-              # What changed between two revisions of a git repository (see README.md and nnr.py).
+              # What changed between two revisions of a git repository: builds `lib.mkReview` (see README.md).
               nnr = pkgs.writeShellApplication {
                 name = "nnr";
                 runtimeInputs = [
                   pkgs.git
                   pkgs.jq
                 ];
-                runtimeEnv = {
-                  # What a report's expression imports (not all of this repository, so editing e.g. the README doesn't
-                  # invalidate cached reports).
-                  NNR_SRC = lib.fileset.toSource {
-                    root = ./.;
-                    fileset = lib.fileset.unions [
-                      ./configs
-                      ./diff.jq
-                      ./mkNestedReport.nix
-                      ./overlays
-                      ./skip.nix
-                    ];
-                  };
-                  # The Hydra jobsets' Nix on x86_64-linux. Elsewhere, the same patched Nix without the (long) profiling
-                  # pipeline.
-                  NNR_NIX =
-                    let
-                      variants = patchedNixVariants system;
-                    in
-                    "${
-                      if system == "x86_64-linux" then variants.cs-pgo-bolt.nix-cli else variants.baseline.nix-cli
-                    }/bin/nix";
-                };
-                text = ''
-                  exec ${lib.getExe pkgs.python3} -I ${./nnr.py} "$@"
-                '';
+                text = builtins.replaceStrings [ "@flake@" ] [ "path:${inputs.self}" ] (builtins.readFile ./nnr.sh);
               };
 
               # Finds the attribute paths to add to ./skip.nix for a Nixpkgs tree: builds a tests report, and while
@@ -390,6 +365,90 @@
       # The patches are against the `nix` input, so update them together.
       # It is built without Boehm GC: reports never collect anyway (see mkReport.nix), so the evaluator bump-allocates
       # from per-thread chunks instead, which took ~7% fewer cycles and 2.5G less memory (24G peak).
+      /**
+        The diff (see mkDiff.nix) between two trees of a git repository, each evaluated by mkReport.nix with the patched
+        Nix (`patchedNixVariants`' cs-pgo-bolt, as `hydraJobs.determinate-nix`). Used by `packages.nnr`, which resolves
+        the revisions.
+
+        - `repo`: the repository (a path);
+        - `base`, `head`: the commits to compare; `head = null` is the working tree (as `builtins.fetchGit` sees it:
+          tracked files as they are, and staged new files);
+        - `tests`: whether to compare `passthru.tests` too; the diff fails if a tests report doesn't evaluate;
+        - `evalSystem`, `withCUDA`, `withCA`: as mkReport.nix's (for Nixpkgs);
+        - `file`, `attr` (dot-separated), `argstrs` (a JSON object of strings), `argExprs` (an attribute set),
+          `forceRecurse`: mkReport.nix's entry point. Without `file`, a tree with pkgs/top-level/all-packages.nix is
+          evaluated as Nixpkgs, and any other tree's default.nix.
+
+        Each tree's reports depend only on the tree and the settings, so a commit's reports are built once and reused by
+        every diff with it.
+      */
+      flake.lib.mkReview =
+        {
+          repo,
+          base,
+          head ? null,
+          system ? builtins.currentSystem,
+          evalSystem ? system,
+          withCUDA ? false,
+          withCA ? false,
+          tests ? false,
+          file ? null,
+          attr ? null,
+          argstrs ? "{}",
+          argExprs ? { },
+          forceRecurse ? false,
+        }:
+        let
+          pkgs = inputs.nixpkgs.legacyPackages.${system};
+
+          mkReports =
+            rev:
+            let
+              tree = builtins.fetchGit ({ url = repo; } // lib.optionalAttrs (rev != null) { inherit rev; });
+              label = if rev == null then "working-tree" else builtins.substring 0 12 rev;
+              mkReport =
+                reportKind:
+                pkgs.callPackage ./mkReport.nix {
+                  name = "report-${reportKind}-${label}";
+                  nixpkgs = tree;
+                  inherit
+                    evalSystem
+                    forceRecurse
+                    reportKind
+                    withCA
+                    withCUDA
+                    ;
+                  nix = (patchedNixVariants system).cs-pgo-bolt.nix-cli;
+                  fingerprintDerivations = true;
+                  file =
+                    if file != null then
+                      file
+                    else if builtins.pathExists "${tree}/pkgs/top-level/all-packages.nix" then
+                      null
+                    else
+                      "default.nix";
+                  args = builtins.fromJSON argstrs // argExprs;
+                  attrPath = if attr == null then [ ] else lib.splitString "." attr;
+                };
+            in
+            {
+              inherit label;
+              packages = mkReport "packages";
+              tests = if tests then mkReport "tests" else null;
+            };
+
+          pre = mkReports base;
+          post = mkReports head;
+        in
+        pkgs.callPackage ./mkDiff.nix {
+          name = "diff-${pre.label}-${post.label}";
+          reportPre = pre.packages;
+          reportPost = post.packages;
+          testsPre = pre.tests;
+          testsPost = post.tests;
+          requireTests = tests;
+        };
+
       flake.hydraJobs.determinate-nix = lib.genAttrs [ "x86_64-linux" ] (
         system: (patchedNixVariants system).cs-pgo-bolt.nix-cli
       );
