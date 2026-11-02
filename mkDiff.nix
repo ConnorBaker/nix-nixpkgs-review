@@ -7,6 +7,8 @@
   # Optional: the tests reports for the same Nixpkgs (mkReport.nix's `reportKind = "tests"`), both or neither.
   testsPre ? null,
   testsPost ? null,
+  # Whether to fail, with the tests reports' errors, if a tests report didn't evaluate, rather than compare only packages.
+  requireTests ? false,
 
   # callPackage arguments
   jq,
@@ -25,6 +27,9 @@
 assert lib.assertMsg (
   (testsPre == null) == (testsPost == null)
 ) "mkDiff.nix: give both testsPre and testsPost, or neither";
+assert lib.assertMsg (
+  requireTests -> testsPre != null
+) "mkDiff.nix: requireTests needs testsPre and testsPost";
 runCommand name
   {
     __structuredAttrs = true;
@@ -35,6 +40,11 @@ runCommand name
     tests = lib.optionals (testsPre != null) [
       "${testsPre}"
       "${testsPost}"
+    ];
+
+    testsErrors = lib.optionals requireTests [
+      "${testsPre.error}"
+      "${testsPost.error}"
     ];
 
     passthru = {
@@ -54,6 +64,17 @@ runCommand name
     echo null > null.json
     if (( ''${#tests[@]} > 0 )); then
       if [[ "$(head -c 4 "''${tests[0]}")" == null || "$(head -c 4 "''${tests[1]}")" == null ]]; then
+        if (( ''${#testsErrors[@]} > 0 )); then
+          # The full errors first, then a summary (the attribute path and the last error line of each), which is what
+          # the end of the log, as Nix shows it, has room for.
+          jq --raw-output 'select(. != null) | .error' "''${testsErrors[@]}" >&2
+          nixErrorLog "a tests report didn't evaluate (to skip a test, add its attribute path to skip.nix):"
+          jq --raw-output '
+            select(. != null)
+            | "  \(.attrPath // ["?"] | join(".")): \(.error | split("\n") | map(select(test("^ *error: "))) | last // "?" | sub("^ +"; ""))"
+          ' "''${testsErrors[@]}" >&2
+          exit 1
+        fi
         nixLog "a tests report didn't evaluate (see its error output), so only packages are compared"
       else
         compared=true

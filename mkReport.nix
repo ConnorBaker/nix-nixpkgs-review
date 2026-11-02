@@ -1,6 +1,7 @@
 {
   # config
   name,
+  # The tree to evaluate: Nixpkgs, or, with `file`, any tree.
   nixpkgs,
   evalSystem,
   withCA,
@@ -8,6 +9,17 @@
   # Nix file (or directory) whose expression maps { withCA, withCUDA } to the arguments (other than `system`) to import
   # Nixpkgs with; defaults to ./configs and ./overlays.
   nixpkgsArgs ? null,
+  # What to evaluate in a tree that isn't Nixpkgs, like nix-eval-jobs' arguments: a Nix file in the tree (relative to
+  # its root), which, if it's a function taking an attribute set, is called with the attributes of `args` it takes. With
+  # null, the tree is Nixpkgs, imported for `evalSystem` with `nixpkgsArgs`. `args` is passed to the evaluation as JSON,
+  # so its values can be anything JSON can hold, or paths (which are passed as store paths).
+  file ? null,
+  args ? { },
+  # An attribute path to select in what `file` (or Nixpkgs) evaluates to, e.g. [ "python3Packages" ].
+  attrPath ? [ ],
+  # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (see mkNestedReport.nix),
+  # e.g. for a Hydra jobset.
+  forceRecurse ? false,
   # Whether `nix` has the `fingerprint-derivations` setting (see ./patches/nix) and should use it: the reports' output
   # paths are then fingerprints, which are only good for comparing with reports made the same way.
   fingerprintDerivations ? false,
@@ -29,7 +41,7 @@
   time,
 }:
 let
-  # The expression the report is the JSON of: mkNestedReport.nix's result for Nixpkgs.
+  # The expression the report is the JSON of: mkNestedReport.nix's result for Nixpkgs (or `file`).
   # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
   # to a temporary store.
   # Because of Nix's path semantics, ./configs and ./overlays create top-level store path entries with the contents
@@ -38,25 +50,44 @@ let
   # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo
   expr = ''
     let
-      pkgs = import ${nixpkgs} (
-        {
-          system = "${evalSystem}";
-        }
-        // ${
-          if nixpkgsArgs != null then
-            "import ${nixpkgsArgs}"
-          else
-            "(args: { config = import ${./configs} args; overlays = import ${./overlays} { inherit (args) withCA; }; })"
-        } {
-          withCA = ${builtins.toJSON withCA};
-          withCUDA = ${builtins.toJSON withCUDA};
-        }
-      );
+      root = ${
+        if file == null then
+          ''
+            import ${nixpkgs} (
+              {
+                system = "${evalSystem}";
+              }
+              // ${
+                if nixpkgsArgs != null then
+                  "import ${nixpkgsArgs}"
+                else
+                  "(args: { config = import ${./configs} args; overlays = import ${./overlays} { inherit (args) withCA; }; })"
+              } {
+                withCA = ${builtins.toJSON withCA};
+                withCUDA = ${builtins.toJSON withCUDA};
+              }
+            )''
+        else
+          "autoCall (import ${nixpkgs}/${file})"
+      };
+
+      autoArgs = builtins.fromJSON ${lib.strings.escapeNixString (builtins.toJSON args)};
+
+      # As `nix-build` and nix-eval-jobs call a file's function: with the arguments it takes.
+      autoCall =
+        f:
+        if builtins.isFunction f && builtins.functionArgs f != { } then
+          f (builtins.intersectAttrs (builtins.functionArgs f) autoArgs)
+        else
+          f;
+
+      attrPath = builtins.fromJSON ${lib.strings.escapeNixString (builtins.toJSON attrPath)};
     in
     import ${./mkNestedReport.nix} {
       kind = ${builtins.toJSON reportKind};
       skip = builtins.fromJSON ${lib.strings.escapeNixString (builtins.toJSON skip)};
-    } pkgs
+      forceRecurse = ${builtins.toJSON forceRecurse};
+    } (autoCall (builtins.foldl' (value: name: (autoCall value).''${name}) root attrPath))
   '';
 in
 runCommand name
@@ -76,7 +107,11 @@ runCommand name
 
     passthru = {
       inherit
+        args
+        attrPath
         evalSystem
+        file
+        forceRecurse
         nixpkgs
         reportKind
         skip
