@@ -1,19 +1,20 @@
 # shellcheck shell=bash
 # nnr: what changed between two trees of a git repository. Resolves the revisions, then builds the flake's
-# `lib.mkReview` (mkDiff.nix over mkReport.nix's reports) and prints the diff. See README.md.
+# `lib.mkReview` (mkJobs.nix for mkDiff.nix over mkReport.nix's reports) and prints the jobs' store path. See README.md.
 
 usage() {
   cat >&2 <<'EOF'
 usage: nnr [REPO] [options]
 
-Prints the attribute paths of the derivations added, changed and removed between two trees of the git repository
-REPO (default: .): HEAD^ and HEAD, or --base and --head, or with --uncommitted, HEAD (or --base) and the working tree.
+Prints the store path of a Nix expression for the derivations added or changed between two trees of the git
+repository REPO (default: .): HEAD^ and HEAD, or --base and --head, or with --uncommitted, HEAD (or --base) and the
+working tree. Evaluate it with e.g. nix-eval-jobs --expr "import $(nnr)". The path also has changed.json, the
+attribute paths as a JSON list of lists.
 
   --base REV            the revision to compare against (default: HEAD^, or HEAD with --uncommitted)
   --head REV            the revision to compare (default: HEAD)
   -u, --uncommitted     compare the working tree instead of --head (tracked files as they are, and staged new files)
   -t, --tests           also compare passthru.tests; fails if they don't evaluate
-  --json                print the diff as JSON (mkDiff.nix's output)
 
 Entry point (default: Nixpkgs, if the tree has pkgs/top-level/all-packages.nix, and otherwise default.nix):
   -f, --file FILE       a Nix file in the tree (relative to its root)
@@ -31,7 +32,6 @@ repo=
 base=
 head=
 uncommitted=false
-json=false
 # mkReview's arguments, as JSON (all but `args`' --arg values, which are Nix expressions).
 request='{"args": {}}'
 argExprs=
@@ -52,7 +52,6 @@ while (($# > 0)); do
   --head) need 2 "$@" && head=$2 && shift ;;
   -u | --uncommitted) uncommitted=true ;;
   -t | --tests) set_request .tests true ;;
-  --json) json=true ;;
   -f | --file) need 2 "$@" && set_request .file "$(jsonString "$2")" && shift ;;
   -A | --attr) need 2 "$@" && set_request .attr "$(jsonString "$2")" && shift ;;
   --arg)
@@ -102,7 +101,7 @@ set_request .base "$(jsonString "$base")"
 echo "nnr: comparing ${base:0:12} with $headLabel" >&2
 
 # --max-jobs 1: each report evaluates on every core and takes tens of GB of memory, so build them one at a time.
-diff=$(
+jobs=$(
   nix build --impure --no-link --print-out-paths --max-jobs 1 \
     --expr '
       { request, argExprs }:
@@ -115,17 +114,5 @@ diff=$(
     --arg argExprs "{$argExprs }"
 )
 
-if [[ $json == true ]]; then
-  cat "$diff"
-  echo
-  exit 0
-fi
-
-jq --raw-output '
-  def nixName:
-    if test("^[A-Za-z_][A-Za-z0-9_'"'"'-]*$")
-      and (IN("assert", "else", "if", "in", "inherit", "let", "or", "rec", "then", "with") | not)
-    then . else tojson end;
-  ("added", "changed", "removed") as $kind
-  | "\(.[$kind] | length) \($kind):", (.[$kind][] | "  " + (map(nixName) | join(".")))
-' "$diff"
+echo "nnr: $(jq length "$jobs/changed.json") added or changed" >&2
+echo "$jobs"

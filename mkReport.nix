@@ -43,52 +43,33 @@ assert lib.assertMsg (
   !(forceRecurse && file == null)
 ) "mkReport.nix: forceRecurse is for a `file`: Nixpkgs (e.g. `pkgs.pkgs`) would never finish";
 let
-  # The expression the report is the JSON of: mkNestedReport.nix's result for Nixpkgs (or `file`).
+  # What the report evaluates (shared with mkJobs.nix, through passthru.root).
+  root = import ./rootExpr.nix {
+    inherit
+      args
+      attrPath
+      evalSystem
+      file
+      lib
+      nixpkgs
+      nixpkgsArgs
+      withCA
+      withCUDA
+      ;
+  };
+
+  # The expression the report is the JSON of: mkNestedReport.nix's result for `root`.
   # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
   # to a temporary store.
   # Because of Nix's path semantics, ./configs and ./overlays create top-level store path entries with the contents
   # of those directories. As such, references within the directory are fine, but references which escape the directory
   # are not going to work.
   expr = ''
-    let
-      root = ${
-        if file == null then
-          ''
-            import ${nixpkgs} (
-              {
-                system = "${evalSystem}";
-              }
-              // ${
-                if nixpkgsArgs != null then
-                  "import ${nixpkgsArgs}"
-                else
-                  "(args: { config = import ${./configs} args; overlays = import ${./overlays}; })"
-              } {
-                withCA = ${builtins.toJSON withCA};
-                withCUDA = ${builtins.toJSON withCUDA};
-              }
-            )''
-        else
-          "autoCall (import ${nixpkgs}/${file})"
-      };
-
-      autoArgs = builtins.fromJSON ${lib.strings.escapeNixString (builtins.toJSON args)};
-
-      # As `nix-build` and nix-eval-jobs call a file's function: with the arguments it takes.
-      autoCall =
-        f:
-        if builtins.isFunction f && builtins.functionArgs f != { } then
-          f (builtins.intersectAttrs (builtins.functionArgs f) autoArgs)
-        else
-          f;
-
-      attrPath = builtins.fromJSON ${lib.strings.escapeNixString (builtins.toJSON attrPath)};
-    in
     import ${./mkNestedReport.nix} {
       kind = ${builtins.toJSON reportKind};
       skip = builtins.fromJSON ${lib.strings.escapeNixString (builtins.toJSON skip)};
       forceRecurse = ${builtins.toJSON forceRecurse};
-    } (autoCall (builtins.foldl' (value: name: (autoCall value).''${name}) root attrPath))
+    } (${root})
   '';
 in
 runCommand name
@@ -114,6 +95,7 @@ runCommand name
         forceRecurse
         nixpkgs
         reportKind
+        root
         skip
         withCA
         withCUDA

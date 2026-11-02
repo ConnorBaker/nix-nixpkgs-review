@@ -89,9 +89,10 @@
         };
 
       /**
-        The diff (see mkDiff.nix) between two trees of a git repository, each evaluated by mkReport.nix with the patched
-        Nix (`patchedNixVariants`' cs-pgo-bolt, as `hydraJobs.determinate-nix`). Used by `packages.nnr`, which resolves
-        the revisions.
+        The jobs (see mkJobs.nix) for what changed between two trees of a git repository: a Nix expression for the
+        derivations added or changed in `head`, for nix-eval-jobs or a Hydra jobset. Each tree is evaluated by
+        mkReport.nix with the patched Nix (`patchedNixVariants`' cs-pgo-bolt, as `hydraJobs.determinate-nix`), and the
+        reports are compared by mkDiff.nix (in `passthru.diff`). Used by `packages.nnr`, which resolves the revisions.
 
         - `repo`: the repository (a path);
         - `base`, `head`: the commits to compare; `head = null` is the working tree (as `builtins.fetchGit` sees it:
@@ -162,13 +163,17 @@
           pre = mkReports base;
           post = mkReports head;
         in
-        pkgs.callPackage ./mkDiff.nix {
-          name = "diff-${pre.label}-${post.label}";
-          reportPre = pre.packages;
-          reportPost = post.packages;
-          testsPre = pre.tests;
-          testsPost = post.tests;
-          requireTests = tests;
+        pkgs.callPackage ./mkJobs.nix {
+          name = "jobs-${pre.label}-${post.label}";
+          report = post.packages;
+          diff = pkgs.callPackage ./mkDiff.nix {
+            name = "diff-${pre.label}-${post.label}";
+            reportPre = pre.packages;
+            reportPost = post.packages;
+            testsPre = pre.tests;
+            testsPost = post.tests;
+            requireTests = tests;
+          };
         };
 
       # The Nix used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
