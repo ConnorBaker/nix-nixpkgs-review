@@ -18,7 +18,7 @@
   # An attribute path to select in what `file` (or Nixpkgs) evaluates to, e.g. [ "python3Packages" ].
   attrPath ? [ ],
   # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (see mkNestedReport.nix),
-  # e.g. for a Hydra jobset.
+  # e.g. for a Hydra jobset. Not for Nixpkgs, which would never finish (e.g. `pkgs.pkgs` is `pkgs`).
   forceRecurse ? false,
   # Whether `nix` has the `fingerprint-derivations` setting (see ./patches/nix) and should use it: the reports' output
   # paths are then fingerprints, which are only good for comparing with reports made the same way.
@@ -38,8 +38,10 @@
   pkgsBuildHost,
   nix,
   runCommand,
-  time,
 }:
+assert lib.assertMsg (
+  !(forceRecurse && file == null)
+) "mkReport.nix: forceRecurse is for a `file`: Nixpkgs (e.g. `pkgs.pkgs`) would never finish";
 let
   # The expression the report is the JSON of: mkNestedReport.nix's result for Nixpkgs (or `file`).
   # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
@@ -47,7 +49,6 @@ let
   # Because of Nix's path semantics, ./configs and ./overlays create top-level store path entries with the contents
   # of those directories. As such, references within the directory are fine, but references which escape the directory
   # are not going to work.
-  # TODO: Really we want ALL the inputs required to eval nixpkgs, not just the nixpkgs repo
   expr = ''
     let
       root = ${
@@ -61,7 +62,7 @@ let
                 if nixpkgsArgs != null then
                   "import ${nixpkgsArgs}"
                 else
-                  "(args: { config = import ${./configs} args; overlays = import ${./overlays} { inherit (args) withCA; }; })"
+                  "(args: { config = import ${./configs} args; overlays = import ${./overlays}; })"
               } {
                 withCA = ${builtins.toJSON withCA};
                 withCUDA = ${builtins.toJSON withCUDA};
@@ -100,7 +101,6 @@ runCommand name
     nativeBuildInputs = [
       jq
       nix
-      time
     ];
 
     inherit expr;

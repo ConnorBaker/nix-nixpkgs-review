@@ -3,9 +3,9 @@
 Find out which packages a Nixpkgs change adds, changes or removes, by evaluating Nixpkgs before and after and comparing
 the results. It doesn't instantiate or build anything to do so.
 
-- `mkReport.nix` evaluates a Nixpkgs tree inside a derivation, read-only and in parallel
-  (`nix eval --store dummy:// --eval-cores 0`). It records the output path of every derivation Nixpkgs exposes for
-  building, nested the way Nixpkgs is.
+- `mkReport.nix` evaluates a tree (Nixpkgs, or another entry point, as nix-eval-jobs does) inside a derivation,
+  read-only and in parallel (`nix eval --store dummy:// --eval-cores 0`). It records the output path of every
+  derivation exposed for building, nested the way the attribute set is.
 - `mkDiff.nix` compares two reports and lists the attribute paths added, changed and removed.
 - `lib.mkReview` builds the diff between two revisions of a git repository from those, and `nnr` is its command line
   (see [`nnr`](#nnr-what-changed-in-a-git-repository)).
@@ -61,8 +61,8 @@ looked at, since it is full of dependencies and whole package sets):
   [`skip.nix`](./skip.nix) (see [Skipping tests](#skipping-tests)). A tests report always builds: if its evaluation
   fails, it's `null`, and its `error` output says why.
 
-They're separate reports because a report never collects garbage, so one with both holds the garbage of both. For the
-flake's `nixpkgs-pre` (x86_64-linux, with CUDA, our earlier 3.23.1 build without fingerprints, on a busy machine,
+They're separate reports because a report never collects garbage, so one with both holds the garbage of both. For
+Nixpkgs 16a0bed90bd8 (x86_64-linux, with CUDA, our earlier 3.23.1 build without fingerprints, on a busy machine,
 single runs):
 
 | Report | Wall | CPU | Peak memory | Size |
@@ -146,15 +146,16 @@ changed = let d = lib.importJSON diff; in d.added ++ d.changed;
 | `nixpkgs` | The tree to evaluate (a path or store path): Nixpkgs, or, with `file`, any tree. |
 | `evalSystem` | The `system` to import Nixpkgs for. It doesn't need to match the builder's system. |
 | `withCA`, `withCUDA` | Passed to `nixpkgsArgs`. |
-| `nixpkgsArgs` | Optional. A Nix file whose expression is a function from `{ withCA, withCUDA }` to the arguments to import Nixpkgs with (other than `system`). It is copied to the store on its own, so it can't refer to files outside it. Defaults to `./configs` and `./overlays` (see below). |
+| `nixpkgsArgs` | Optional. A Nix file whose expression is a function from `{ withCA, withCUDA }` to the arguments to import Nixpkgs with (other than `system`). It is copied to the store on its own, so it can't refer to files outside it. Defaults to `./configs` and `./overlays`: `allowAliases = false`, `allowBroken = false`, `allowUnfree = false` and `checkMeta = true`; with `withCUDA`, `cudaSupport = true`, `cudaCapabilities = [ "8.9" ]` and only NVIDIA's CUDA licenses allowed; with `withCA`, `contentAddressedByDefault = true`; and without the attributes `nixpkgs-review` skips (`tests.trivial`, `nixos-install-tools`, …). |
 | `fingerprintDerivations` | Optional, default `false`. Pass `--option fingerprint-derivations true`. Only `hydraJobs.determinate-nix` has this setting. The output paths are then fingerprints: equal exactly when the real paths are equal, but only comparable with reports made the same way. |
 | `reportKind` | Optional, default `"packages"`. `"packages"` or `"tests"` (see above). |
 | `skip` | Optional. What not to evaluate (see [Skipping tests](#skipping-tests)). Defaults to `import ./skip.nix` for a tests report, and to nothing for a packages report. |
 | `file`, `args`, `attrPath` | Optional. What to evaluate in a tree that isn't Nixpkgs, as nix-eval-jobs does: a Nix file in the tree, which, if it's a function taking an attribute set, is called with the attributes of `args` it takes, and an attribute path to select (also for Nixpkgs). `args` is passed as JSON, so its values must be JSON values or paths. |
-| `forceRecurse` | Optional, default `false`. Recurse into every attribute set, not just those with `recurseForDerivations` (e.g. for a Hydra jobset). |
+| `forceRecurse` | Optional, default `false`. Recurse into every attribute set, not just those with `recurseForDerivations` (e.g. for a Hydra jobset). Only with `file`: Nixpkgs would never finish (`pkgs.pkgs` is `pkgs`). |
 | `nix` | The Nix to evaluate with. It must be a Determinate Nix: the evaluation uses `--eval-cores`, `--lazy-trees` and the `parallel-eval` feature, which upstream Nix doesn't have. |
 
-The result has `evalSystem`, `nixpkgs`, `reportKind`, `skip`, `withCA` and `withCUDA` in `passthru`, and a tests report
+The result has its arguments (`args`, `attrPath`, `evalSystem`, `file`, `forceRecurse`, `nixpkgs`, `reportKind`, `skip`,
+`withCA` and `withCUDA`) in `passthru`, and a tests report
 has an `error` output (see [Skipping tests](#skipping-tests)). `mkDiff.nix` takes `name`, the packages reports
 `reportPre` and `reportPost`, optionally the tests reports `testsPre` and `testsPost` (both or neither), and
 `requireTests`, to fail with the tests reports' errors rather than compare only packages when one didn't evaluate.
@@ -199,17 +200,8 @@ When a tests report still fails to evaluate (e.g. a test broke in Nixpkgs since 
 ```
 
 `attrPath` is the attribute path the evaluation was printing when it failed, from the trace (null if there isn't one),
-i.e. the path to skip. A diff then compares only packages (`testsCompared` is false).
-
-To find the entries a Nixpkgs tree needs, `find-skips` makes tests reports, skipping `error`'s `attrPath` each time,
-until one evaluates, and prints the entries it added (e.g. `libgit2.passthru.tests.gitstatus = true;`):
-
-```bash
-nix run .#find-skips -- --cuda --system x86_64-linux --nix "$(nix build --print-out-paths --no-link .#hydraJobs.determinate-nix.x86_64-linux)" /path/to/nixpkgs
-```
-
-Each round evaluates Nixpkgs once. For the flake's `nixpkgs-pre` with CUDA, it found the 25 entries `skip.nix` had been
-missing in 26 rounds (25 minutes, when each round evaluated Nixpkgs twice).
+i.e. the path to skip. A diff then compares only packages (`testsCompared` is false), unless it has `requireTests`, in
+which case it fails with the errors and their attribute paths (as `nnr --tests` does).
 
 ## `nnr`: what changed in a git repository
 
@@ -237,8 +229,8 @@ nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --args
   they are on disk, and new files only once staged (`git add -N` is enough).
 - **What it evaluates:** Nixpkgs, if the tree has `pkgs/top-level/all-packages.nix`, configured as the flake's reports
   are (`./configs` and `./overlays`, with `--system`, `--cuda` and `--ca`). Otherwise `default.nix`, or `-f`, called with
-  `--arg` and `--argstr`. `-A` and `--force-recurse` work for both. These are `mkReport.nix`'s `file`, `args`,
-  `attrPath` and `forceRecurse`.
+  `--arg` and `--argstr`. `-A` works for both, and `--force-recurse` for a file. These are `mkReport.nix`'s `file`,
+  `args`, `attrPath` and `forceRecurse`.
 - **With what:** the patched Nix, built with CSPGO and BOLT for the system it runs on (on x86_64-linux, that's
   `hydraJobs.determinate-nix`), with fingerprints.
 - **Reuse:** a report's derivation depends only on its tree and the settings (it's named after the commit, e.g.
@@ -250,61 +242,13 @@ nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --args
   evaluate, the diff fails with its error and the attribute path it failed at (see [Skipping tests](#skipping-tests)).
 - **Limitations:** reports evaluate in a sandbox, on a dummy store, so an entry point that fetches anything (e.g.
   `fetchTarball`, or flake inputs) or uses import-from-derivation fails. `--arg` values reach the evaluation as JSON,
-  so they can only be JSON values or paths, e.g. `--arg nixpkgs ~/src/nixpkgs`. `nnr` doesn't build what it lists.
-
-## The flake's pull request outputs
-
-The flake reviews one pull request, pinned by two inputs:
-
-- `nixpkgs-pre`: the commit before the pull request;
-- `nixpkgs-post`: the pull request's head, e.g. `github:NixOS/nixpkgs/pull/437723/head`.
-
-To review another pull request, change both in `flake.nix` and run `nix flake update nixpkgs-pre nixpkgs-post`.
-Don't use `--override-input` (see the limitations below).
-
-The outputs are named after a configuration, `pkgs-<system>[-ca][-cuda]-<pre|post>`:
-
-| Output | What it is |
-|---|---|
-| `reports.<system>.<configuration>` | The report for that configuration, built on `<system>`. |
-| `diffs.<system>.<configuration>-<configuration>` | The diff between two configurations with the same evaluated system and CA setting. |
-| `packages.<system>.review-<configuration>-<configuration>` | A script that prints a diff's added and changed attribute paths, then builds them with `nix build --keep-going`. |
-| `packageSets.<system>.<configuration>` | The Nixpkgs package sets, for inspecting single packages. |
-
-For example, on x86_64-linux:
-
-```bash
-# What the pull request changes, with and without CUDA:
-nix build .#diffs.x86_64-linux.pkgs-x86_64-linux-pre-pkgs-x86_64-linux-post
-nix build .#diffs.x86_64-linux.pkgs-x86_64-linux-cuda-pre-pkgs-x86_64-linux-cuda-post
-jq -r '.changed[] | join(".")' result
-
-# Build everything it adds or changes (run from the root of this repository):
-nix run .#review-pkgs-x86_64-linux-pre-pkgs-x86_64-linux-post
-```
-
-Without `nixpkgsArgs`, Nixpkgs is configured by `./configs` and `./overlays`:
-
-- `allowAliases = false`, `allowBroken = false`, `allowUnfree = false`, `checkMeta = true`;
-- with CUDA: `cudaSupport = true`, `cudaCapabilities = [ "8.9" ]`, and only NVIDIA's CUDA licenses allowed;
-- with CA: `contentAddressedByDefault = true`, plus an overlay disabling tests that fail when everything is
-  content-addressed;
-- the same attributes `nixpkgs-review` skips (`tests.trivial`, `nixos-install-tools`, …) are removed.
-
-Limitations:
-
-- The reports use stock Determinate Nix (the `nix` input), which isn't cached and is built from source first. They don't
-  use the patched Nix or fingerprints.
-- The `review-*` scripts build `.#packageSets…` from the current directory, so they only work when run from this
-  repository, and with its committed lock file: inputs overridden with `--override-input` apply to the diff but not to
-  what the script builds.
-- Diffs are defined for every pair of configurations with the same evaluated system and CA setting, including
-  pointless ones such as `pre`→`pre`.
+  so they can only be JSON values or paths, e.g.
+  `--arg nixpkgs 'builtins.fetchGit { url = "/path/to/nixpkgs"; rev = "…"; }'`. `nnr` doesn't build what it lists.
 
 ## Patched Nix
 
-`hydraJobs.determinate-nix.x86_64-linux` is Determinate Nix (the `nix` input: its `main` branch, locked in
-`flake.lock`) built by
+`hydraJobs.determinate-nix.x86_64-linux` (and `nnr`'s Nix, on every system) is Determinate Nix (the `nix` input: its
+`main` branch, locked in `flake.lock`) built by
 [nix-optimization](https://github.com/ConnorBaker/nix-optimization). It's built with Clang full LTO, CSPGO and BOLT,
 all trained on a parallel evaluation of Nixpkgs with fingerprints. It's built without Boehm GC, and with the patches in
 `patches/nix`, which add:
@@ -319,7 +263,8 @@ With CSPGO, the patches took ~54% fewer instructions per report than stock Deter
 apart from the fingerprints' values.
 
 Building it runs four builds of Nix and three instrumented evaluations of Nixpkgs (each needs ~24 GB). Before the BOLT
-stages were added, it took 20–28 minutes on a 32-thread workstation.
+stages were added, it took 20–28 minutes on a 32-thread workstation. On aarch64-linux, nix-optimization uses LLVM 23's
+BOLT and leaves out the BOLT options that are x86-only or miscompile there (see its `helper.nix`).
 
 Its training profiles aren't reproducible (see nix-optimization's README), but their store paths don't depend on what
 they contain. If two machines each build the same profile, they hold different profiles at the same path, and

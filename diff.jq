@@ -1,5 +1,5 @@
 # The diff of two reports (see mkNestedReport.nix), as mkDiff.nix's output: the attribute paths of the derivations
-# added, changed and removed, each sorted, and whether tests were compared. Used by mkDiff.nix and the nnr CLI.
+# added, changed and removed, each sorted, and whether tests were compared. Used by mkDiff.nix.
 #
 # Run with --null-input and:
 #   --slurpfile pre / --slurpfile post: the packages reports;

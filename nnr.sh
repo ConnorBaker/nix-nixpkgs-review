@@ -27,31 +27,53 @@ EOF
   exit 2
 }
 
-repo=.
+repo=
 base=
 head=
 uncommitted=false
 json=false
-reviewArgs=()
-argstrs='{}'
+# mkReview's arguments, as JSON (all but `args`' --arg values, which are Nix expressions).
+request='{"args": {}}'
 argExprs=
+set_request() { # PATH VALUE (JSON)
+  request=$(jq --compact-output --argjson value "$2" "$1 = \$value" <<<"$request")
+}
+# need N "$@": prints the usage unless the option being parsed and its values are N arguments (or more).
+need() {
+  (($# > $1)) || usage
+}
+jsonString() {
+  jq --null-input --arg v "$1" '$v'
+}
+
 while (($# > 0)); do
   case "$1" in
-  --base) base=$2 && shift ;;
-  --head) head=$2 && shift ;;
+  --base) need 2 "$@" && base=$2 && shift ;;
+  --head) need 2 "$@" && head=$2 && shift ;;
   -u | --uncommitted) uncommitted=true ;;
-  -t | --tests) reviewArgs+=(--arg tests true) ;;
+  -t | --tests) set_request .tests true ;;
   --json) json=true ;;
-  -f | --file) reviewArgs+=(--argstr file "$2") && shift ;;
-  -A | --attr) reviewArgs+=(--argstr attr "$2") && shift ;;
-  --arg) argExprs+=" $(jq --null-input --raw-output --arg name "$2" '$name | tojson') = ($3);" && shift 2 ;;
-  --argstr) argstrs=$(jq --compact-output --arg name "$2" --arg value "$3" '.[$name] = $value' <<<"$argstrs") && shift 2 ;;
-  --force-recurse) reviewArgs+=(--arg forceRecurse true) ;;
-  --system) reviewArgs+=(--argstr evalSystem "$2") && shift ;;
-  --cuda) reviewArgs+=(--arg withCUDA true) ;;
-  --ca) reviewArgs+=(--arg withCA true) ;;
+  -f | --file) need 2 "$@" && set_request .file "$(jsonString "$2")" && shift ;;
+  -A | --attr) need 2 "$@" && set_request .attr "$(jsonString "$2")" && shift ;;
+  --arg)
+    need 3 "$@"
+    argExprs+=" $(jq --null-input --raw-output --arg name "$2" '$name | tojson') = ($3);"
+    shift 2
+    ;;
+  --argstr)
+    need 3 "$@"
+    request=$(jq --compact-output --arg name "$2" --arg value "$3" '.args[$name] = $value' <<<"$request")
+    shift 2
+    ;;
+  --force-recurse) set_request .forceRecurse true ;;
+  --system) need 2 "$@" && set_request .evalSystem "$(jsonString "$2")" && shift ;;
+  --cuda) set_request .withCUDA true ;;
+  --ca) set_request .withCA true ;;
   -*) usage ;;
-  *) repo=$1 ;;
+  *)
+    [[ -z $repo ]] || usage
+    repo=$1
+    ;;
   esac
   shift
 done
@@ -61,7 +83,7 @@ if [[ $uncommitted == true && -n $head ]]; then
   exit 2
 fi
 
-repo=$(git -C "$repo" rev-parse --show-toplevel)
+repo=$(git -C "${repo:-.}" rev-parse --show-toplevel)
 commit() {
   git -C "$repo" rev-parse --verify --end-of-options "$1^{commit}"
 }
@@ -72,20 +94,25 @@ if [[ $uncommitted == true ]]; then
 else
   base=$(commit "${base:-HEAD^}")
   head=$(commit "${head:-HEAD}")
-  reviewArgs+=(--argstr head "$head")
+  set_request .head "$(jsonString "$head")"
   headLabel=${head:0:12}
 fi
+set_request .repo "$(jsonString "$repo")"
+set_request .base "$(jsonString "$base")"
 echo "nnr: comparing ${base:0:12} with $headLabel" >&2
 
 # --max-jobs 1: each report evaluates on every core and takes tens of GB of memory, so build them one at a time.
 diff=$(
   nix build --impure --no-link --print-out-paths --max-jobs 1 \
-    --expr '(builtins.getFlake "@flake@").lib.mkReview' \
-    --argstr repo "$repo" \
-    --argstr base "$base" \
-    --argstr argstrs "$argstrs" \
-    --arg argExprs "{$argExprs }" \
-    "${reviewArgs[@]}"
+    --expr '
+      { request, argExprs }:
+      let
+        r = builtins.fromJSON request;
+      in
+      (builtins.getFlake "@flake@").lib.mkReview (r // { args = r.args // argExprs; })
+    ' \
+    --argstr request "$request" \
+    --arg argExprs "{$argExprs }"
 )
 
 if [[ $json == true ]]; then

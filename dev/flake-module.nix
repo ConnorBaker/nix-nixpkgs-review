@@ -6,11 +6,7 @@
   ];
 
   perSystem =
-    {
-      config,
-      pkgs,
-      ...
-    }:
+    { config, ... }:
     {
       pre-commit.settings.hooks = {
         # Formatter checks
@@ -32,10 +28,7 @@
           mdformat.enable = true;
 
           # Nix
-          nixfmt = {
-            enable = true;
-            package = pkgs.nixfmt-rfc-style;
-          };
+          nixfmt.enable = true;
 
           # Shell
           shellcheck.enable = true;
