@@ -14,7 +14,7 @@ attribute paths as a JSON list of lists.
   --base REV            the revision to compare against (default: HEAD^, or HEAD with --uncommitted)
   --head REV            the revision to compare (default: HEAD)
   -u, --uncommitted     compare the working tree instead of --head (tracked files as they are, and staged new files)
-  -t, --tests           also compare passthru.tests; fails if they don't evaluate
+  -t, --tests           also compare passthru.tests
 
 Entry point (default: Nixpkgs, if the tree has pkgs/top-level/all-packages.nix, and otherwise default.nix):
   -f, --file FILE       a Nix file in the tree (relative to its root)
@@ -114,5 +114,8 @@ jobs=$(
     --arg argExprs "{$argExprs }"
 )
 
-echo "nnr: $(jq length "$jobs/changed.json") added or changed" >&2
+jq --raw-output '
+  "nnr: \(.added + .changed + (.fixed // []) | length) added or changed"
+  + (if (.broken // []) != [] then ", \(.broken | length) broken (no longer evaluate): \(.broken | map(join(".")) | .[:10] | join(" "))\(if (.broken | length) > 10 then " ..." else "" end)" else "" end)
+' "$jobs/diff.json" >&2
 echo "$jobs"

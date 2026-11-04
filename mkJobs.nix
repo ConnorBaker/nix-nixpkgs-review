@@ -4,7 +4,7 @@
   # The packages report of the tree to take the jobs from (the diff's `reportPost`; see mkReport.nix): its `root` is
   # what is evaluated.
   report,
-  # The diff (see mkDiff.nix) whose added and changed attribute paths are the jobs.
+  # The diff (see mkDiff.nix) whose added, changed and fixed attribute paths are the jobs.
   diff,
 
   # callPackage arguments
@@ -20,8 +20,8 @@
 # `hello` and `hello.passthru.tests.version`), and nix-eval-jobs doesn't recurse into derivations. Hydra names the jobs of
 # nested attribute sets the same way.
 #
-# $out is a directory: default.nix; root.nix, what the report evaluated (see rootExpr.nix); and changed.json, the
-# attribute paths as a JSON list of lists.
+# $out is a directory: default.nix; root.nix, what the report evaluated (see rootExpr.nix); changed.json, the attribute
+# paths as a JSON list of lists; and diff.json, the diff.
 runCommand name
   {
     __structuredAttrs = true;
@@ -48,7 +48,8 @@ runCommand name
   }
   ''
     mkdir "$out"
-    jq --compact-output '.added + .changed' ${diff} > "$out/changed.json"
+    jq --compact-output '.added + .changed + (.fixed // []) | sort' ${diff} > "$out/changed.json"
+    cp ${diff} "$out/diff.json"
     printf '%s' "$root" > "$out/root.nix"
     printf '%s' "$jobs" > "$out/default.nix"
   ''

@@ -7,58 +7,19 @@
       inputs.nixpkgs-lib.follows = "nixpkgs";
     };
 
-    # Determinate Nix's main branch (locked in flake.lock); ./patches/nix are rebased onto the locked commit.
-    nix = {
-      url = "github:DeterminateSystems/nix-src";
-      inputs = {
-        nixpkgs-regression.follows = "";
-        nixpkgs-23-11.follows = "";
-        flake-parts.follows = "";
-        git-hooks-nix.follows = "";
-      };
-    };
+    # The evaluator mkReport.nix uses (see `hydraJobs.iets`): a Nix evaluator in Rust. A branch of a fork with fixes not
+    # yet merged upstream: numtide/iets#354 (call `__functor` sets, as Nix does) and numtide/iets#355 (an intermittent
+    # abort at exit, which fails a report). Switch back to numtide/iets once both are in.
+    iets.url = "github:ConnorBaker/iets/nix-nixpkgs-review";
 
-    # Builds the patched `nix` with CSPGO and BOLT; see `hydraJobs.determinate-nix`.
-    nix-optimization = {
-      url = "github:ConnorBaker/nix-optimization";
-      inputs = {
-        nix.follows = "nix";
-        flake-parts.follows = "flake-parts";
-      };
-    };
-
-    # Just use whatever Nix has pinned.
-    nixpkgs.follows = "nix/nixpkgs";
+    # Just use whatever iets has pinned, which it's tested with.
+    nixpkgs.follows = "iets/nixpkgs";
   };
 
   outputs =
     inputs:
     let
       inherit (inputs.nixpkgs) lib;
-
-      # The patched Nix (see `hydraJobs.determinate-nix`), in each of nix-optimization's variants.
-      patchedNixVariants =
-        system:
-        inputs.nix-optimization.lib.mkOptimizedVariants {
-          inherit system;
-          profileWorkloads = [
-            [
-              "nixpkgs"
-              "parallel"
-            ]
-          ];
-          patches = lib.pipe (builtins.readDir ./patches/nix) [
-            lib.attrNames
-            (lib.filter (lib.hasSuffix ".patch"))
-            (map (name: ./patches/nix + "/${name}"))
-          ];
-          extraProfileEvalArgs = [
-            "--option"
-            "fingerprint-derivations"
-            "true"
-          ];
-          enableGC = false;
-        };
     in
     inputs.flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [
@@ -90,14 +51,14 @@
 
       /**
         The jobs (see mkJobs.nix) for what changed between two trees of a git repository: a Nix expression for the
-        derivations added or changed in `head`, for nix-eval-jobs or a Hydra jobset. Each tree is evaluated by
-        mkReport.nix with the patched Nix (`patchedNixVariants`' cs-pgo-bolt, as `hydraJobs.determinate-nix`), and the
-        reports are compared by mkDiff.nix (in `passthru.diff`). Used by `packages.nnr`, which resolves the revisions.
+        derivations added, changed or fixed in `head`, for nix-eval-jobs or a Hydra jobset. Each tree is evaluated by
+        mkReport.nix (with iets, as `hydraJobs.iets`), and the reports are compared by mkDiff.nix (in `passthru.diff`).
+        Used by `packages.nnr`, which resolves the revisions.
 
         - `repo`: the repository (a path);
         - `base`, `head`: the commits to compare; `head = null` is the working tree (as `builtins.fetchGit` sees it:
           tracked files as they are, and staged new files);
-        - `tests`: whether to compare `passthru.tests` too; the diff fails if a tests report doesn't evaluate;
+        - `tests`: whether to compare `passthru.tests` too;
         - `system`: the system to build the reports on; it defaults to the current one, which needs `--impure`;
         - `evalSystem`, `withCUDA`, `withCA`: as mkReport.nix's (for Nixpkgs);
         - `file`, `attr` (dot-separated), `args`, `forceRecurse`: mkReport.nix's entry point. Without `file`, a tree
@@ -142,8 +103,7 @@
                     withCA
                     withCUDA
                     ;
-                  nix = (patchedNixVariants system).cs-pgo-bolt.nix-cli;
-                  fingerprintDerivations = true;
+                  iets = inputs.iets.packages.${system}.default;
                   file =
                     if file != null then
                       file
@@ -172,26 +132,13 @@
             reportPost = post.packages;
             testsPre = pre.tests;
             testsPost = post.tests;
-            requireTests = tests;
           };
         };
 
-      # The Nix used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
+      # The iets used by mkReport.nix; Hydra jobsets consume it as a `build` input so they never need to fetch or build
       # it during evaluation.
-      # It is built with CSPGO and then BOLT (both profiled on a parallel evaluation of Nixpkgs) and with the patches in
-      # ./patches/nix
-      # (`git format-patch` output, applied in order), notably:
-      # - the `fingerprint-derivations` setting, which computes derivation and output paths that are only good for
-      #   telling whether derivations changed, but much more cheaply;
-      # - `maybeParseStorePath()` not throwing (~1.8M exceptions per report) for paths that obviously aren't store
-      #   paths, such as the files of Nixpkgs;
-      # - evaluator hot path fixes (~20% fewer instructions per report), which keep the reports identical (apart from
-      #   the fingerprints' values, which only need to be comparable with each other).
-      # The patches are against the `nix` input, so update them together.
-      # It is built without Boehm GC: reports never collect anyway (see mkReport.nix), so the evaluator bump-allocates
-      # from per-thread chunks instead, which took ~7% fewer cycles and 2.5G less memory (24G peak).
-      flake.hydraJobs.determinate-nix = lib.genAttrs [ "x86_64-linux" ] (
-        system: (patchedNixVariants system).cs-pgo-bolt.nix-cli
+      flake.hydraJobs.iets = lib.genAttrs [ "x86_64-linux" ] (
+        system: inputs.iets.packages.${system}.default
       );
 
       partitionedAttrs = {
