@@ -41,11 +41,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1793827188,
-        "narHash": "sha256-LmdgALxmhNqAERZCvCYgLmQadO7JtZqH81Ky+/qD3d4=",
+        "lastModified": 1793829099,
+        "narHash": "sha256-A8cBS8jhnkG4MPTowXjqU9EBkdCMOqZV0uubiH/Epbw=",
         "owner": "ConnorBaker",
         "repo": "iets",
-        "rev": "6687cf2e0725d08739d1bd54b5f71f9bf78125e9",
+        "rev": "65d2d98a482d2622ebf24d8b08c620136819be0f",
         "type": "github"
       },
       "original": {
