@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # nnr: what changed between two trees of a git repository. Resolves the revisions, then builds the flake's
-# `lib.mkReview` (mkJobs.nix for mkDiff.nix over mkReport.nix's reports) and prints the jobs' store path. See README.md.
+# `lib.mkReview` (review.nix) and prints the jobs' store path.
 
 usage() {
   cat >&2 <<'EOF'
@@ -23,7 +23,7 @@ Entry point (default: Nixpkgs, if the tree has pkgs/top-level/all-packages.nix, 
   --argstr NAME STRING  pass a string to the file's function
   --force-recurse       recurse into every attribute set, not just those with recurseForDerivations
   --system SYSTEM       for Nixpkgs: the system to evaluate for (default: this one)
-  --cuda, --ca          for Nixpkgs: with cudaSupport or contentAddressedByDefault (see configs/)
+  --cuda, --ca          for Nixpkgs: with cudaSupport or contentAddressedByDefault (see eval/nixpkgs.nix)
 EOF
   exit 2
 }
@@ -100,7 +100,8 @@ set_request .repo "$(jsonString "$repo")"
 set_request .base "$(jsonString "$base")"
 echo "nnr: comparing ${base:0:12} with $headLabel" >&2
 
-# --max-jobs 1: each report evaluates on 8 workers and takes ~20 GB of memory, so build them one at a time.
+# --max-jobs 1: for Nixpkgs, each report evaluates on 8 workers and takes ~19 GB of memory (~33 GB with --tests), so
+# build them one at a time.
 jobs=$(
   nix build --impure --no-link --print-out-paths --max-jobs 1 \
     --expr '

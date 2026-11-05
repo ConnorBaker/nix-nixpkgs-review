@@ -1,3 +1,0 @@
-{
-  contentAddressedByDefault = true;
-}

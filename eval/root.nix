@@ -1,0 +1,60 @@
+# What nnr evaluates in a tree, from its settings (see ../review.nix): the tree imported as Nixpkgs, or a file in it
+# called with `args`, then `attrPath` selected.
+{
+  # The tree, a store path.
+  tree,
+  # A Nix file in the tree (relative to its root), or null for Nixpkgs.
+  file,
+  # What `file`'s function (and every function along `attrPath`) is called with, as `nix-build --arg` does.
+  args,
+  attrPath,
+  # For Nixpkgs: the system to import it for, and its configuration (see ./nixpkgs.nix).
+  evalSystem,
+  withCA,
+  withCUDA,
+  # Whether `jobs` has the tree's `passthru.tests` (see ./tests.nix).
+  tests,
+  # Whether to recurse into every attribute set, not just those with `recurseForDerivations`.
+  forceRecurse,
+}:
+let
+  # As Nix auto-calls a value (eval.cc:autoCallFunction): a function taking an attribute set is called with the
+  # attributes of `args` it takes, and a `__functor` set is called through its functor.
+  autoCall =
+    args: f:
+    if builtins.isFunction f then
+      (
+        if builtins.functionArgs f != { } then
+          f (builtins.intersectAttrs (builtins.functionArgs f) args)
+        else
+          f
+      )
+    else if builtins.isAttrs f && f ? __functor then
+      autoCall args (f.__functor f)
+    else
+      f;
+
+  # The value at an attribute path, auto-calling each value on the way.
+  selectAlong = args: builtins.foldl' (value: name: (autoCall args value).${name});
+
+  imported =
+    if file == null then
+      import tree ({ system = evalSystem; } // import ./nixpkgs.nix { inherit withCA withCUDA; })
+    else
+      import "${tree}/${file}";
+
+  root = autoCall args (selectAlong args imported attrPath);
+in
+{
+  # The tree eval-jobs walks: the derivations under `packages`, and their tests under `tests`. The report drops that
+  # first attribute name, so each job's attribute path is its path in `root`.
+  jobs = {
+    recurseForDerivations = true;
+    packages = if builtins.isAttrs root then root // { recurseForDerivations = true; } else root;
+  }
+  // (if tests then { tests = import ./tests.nix { inherit forceRecurse; } root; } else { });
+
+  # A job, by its attribute path in `root`, as eval-jobs reached it: it auto-calls every value it walks, with no
+  # arguments.
+  select = selectAlong { } root;
+}

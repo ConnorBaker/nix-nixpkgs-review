@@ -1,6 +1,5 @@
-# The diff of two trees' reports (see mkReport.nix), as mkDiff.nix's output. Run with --null-input,
-# --slurpfile pre / --slurpfile post: each the lines of one tree's reports (its packages report, and its tests report if
-# any), whose attribute paths don't overlap.
+# The diff of two trees' reports (see review.nix). Run with --null-input and --slurpfile pre / --slurpfile post, each the
+# lines of one tree's report.
 #
 # Yields the attribute paths, each sorted, of the derivations
 #   added:   that are jobs in post and weren't there in pre;
