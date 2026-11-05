@@ -17,7 +17,7 @@
   # Whether `jobs` has the tree's tests: its `passthru.tests` and GPU checks (see ./tests.nix).
   tests,
   # With `tests`: the packages whose tests not to walk, as ./tests.nix's `skip` (and added to it).
-  skipTests ? { },
+  skipTests,
   # Whether to recurse into every attribute set, not just those with `recurseForDerivations`.
   forceRecurse,
 }:

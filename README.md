@@ -37,21 +37,18 @@ nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --args
 - [`diff.jq`](./diff.jq) compares two reports.
 - [`eval/jobs.nix`](./eval/jobs.nix) becomes the jobs' `default.nix`.
 
-Nothing here is a stable interface. Its other user is the [nixos-cuda](https://github.com/nixos-cuda) Hydra's pull
-request jobset (`jobsets/nixpkgs-pr.nix` in nixos-cuda/hydra-jobsets), which calls `lib.nix` with the `tools`
-jobset's build of `hydraJobs.iets`, as a `build` input, and its own `nixpkgsArgs`, so that the reports evaluate Nixpkgs
-as release-lib does for its jobs.
+Nothing here is a stable interface. Its other users are the [nixos-cuda](https://github.com/nixos-cuda) Hydra's
+jobsets (nixos-cuda/hydra-jobsets), which call `lib.nix` with a build of `hydraJobs.iets` and their own `nixpkgsArgs`,
+so that the reports evaluate Nixpkgs as release-lib does for their jobs.
 
 ## Reports
 
 A tree's report is every job `eval-jobs` finds in it, as nix-eval-jobs and Hydra walk it: attribute sets with
 `recurseForDerivations` (or all of them, with `--force-recurse`) are recursed into, and functions are called with the
-arguments they have defaults for. It's one JSON line per attribute path, sorted, with a derivation's outputs (and its
-`requiredSystemFeatures` if it has any, and its `meta.hydraPlatforms` if that's a list of systems), or the error the
-attribute failed to evaluate with:
+arguments they have defaults for. It's one JSON line per attribute path, sorted, with a derivation's outputs, or the
+error the attribute failed to evaluate with:
 
 ```json
-{"attrPath":["cudaPackages","saxpy","passthru","gpuCheck"],"outputs":{"out":"/nix/store/…-saxpy-0-unstable-2023-07-11"},"requiredSystemFeatures":["cuda"]}
 {"attrPath":["hello"],"outputs":{"out":"/nix/store/nsq63r5qzvvlhhpmi5sa9hvs86j6mr8n-hello-2.12.3"}}
 {"attrPath":["hello","passthru","tests","version"],"outputs":{"out":"/nix/store/…-hello-test-version"}}
 {"attrPath":["zoom-us"],"error":"Refusing to evaluate package 'zoom-7.2.1.5760' in /nix/store/kc3dkdhlx5hz6mf3wg3szbnjrgbbrmyj-source/pkgs/by-name/zo/zoom-us/package.nix:138 because it has an unfree license (‘unfree’)"}
@@ -67,6 +64,8 @@ attribute failed to evaluate with:
   (e.g. a stack overflow) fails a report.
 - A report depends only on its tree and settings (it's named after the commit, e.g. `report-e58dcdca81f2`), so a
   commit's report is built once and reused by every comparison with it, until garbage-collected.
+- With `lib.nix`'s `apply` (a Nix function, as for `eval-jobs --apply`), each derivation's line also has `extraValue`,
+  what the function returns for it (e.g. its `requiredSystemFeatures`).
 
 ### Tests
 
@@ -78,34 +77,16 @@ their paths in the tree (`hello.passthru.tests.version`):
   test's own `passthru.tests` isn't: tests are often overrides of the package, whose tests are more overrides.
 - GPU checks, as Nixpkgs' CUDA testing convention has them (`doc/languages-frameworks/cuda.section.md`), are tests too:
   a derivation's `passthru.gpuCheck` (`cudaPackages.saxpy.passthru.gpuCheck`) and each test's `gpuCheck`
-  (`blender.passthru.tests.tester-cudaAvailable.gpuCheck`). Their `requiredSystemFeatures` (`[ "cuda" ]`) are in the
-  report, so a caller can pick out the tests that need a GPU.
+  (`blender.passthru.tests.tester-cudaAvailable.gpuCheck`).
 - NixOS tests (`nixosTests.*`, which many packages list) are skipped: computing their output path evaluates a NixOS
   system per node.
 - The Home Assistant component tests are skipped (`skip` in `eval/tests.nix`): each of the ~1,200 components lists all
   of them, so walking them made 1.4M test jobs instead of 10.6k. Each is still a test of `home-assistant`, as
   `home-assistant.passthru.tests.components.<component>`.
-- `lib.nix`'s `mkReport` takes `skipTests`, more of the tree whose tests not to walk, for a caller that needs only some
-  tests.
-  - The nixos-cuda GPU-checks jobset uses it to skip `dotnetCorePackages` and `azure-cli-extensions`, which have no GPU
-    checks.
-  - Their tests were the most memory-hungry: for Nixpkgs ae2b13d55ef7 (x86_64-linux, with CUDA), skipping them took a
-    report with tests from 31.1 GB and 25.5 s to 22.4 GB and 18.9 s.
-
-A report can't free what it has evaluated (iets can't), so its memory only grows. `mkReport`'s `workers` and
-`maxMemorySize` bound it:
-
-- By default, `workers` 8 and `maxMemorySize` 0: 8 threads of one process, with no limit.
-- With a limit, `workers` processes, each replaced once over `maxMemorySize` MB, so the peak is about their product.
-- Each process evaluates what the jobs share again, so it takes longer. For that report with tests, on 20
-  aarch64-linux cores:
-  - 4 processes of 4096 MB took 39.9 s with a peak of 16.4 GB, against 25.5 s and 31.1 GB with 8 threads;
-  - 8 processes of 4096 MB (nix-eval-jobs' default) saved nothing: 31.1 GB;
-  - with the two test sets above skipped, 8 processes of 2048 MB took 25.8 s with a peak of 15.2 GB, and 4 of 4096 MB
-    33.0 s and 15.8 GB: more, smaller processes are faster for the same memory.
+- `lib.nix`'s `skipTests` skips more, for a caller that needs only some tests.
 
 Nixpkgs' CI evaluates packages but not their tests, so tests that fail to evaluate aren't rare; they're errors like any
-other.
+other. An error in a derivation's `passthru` (or its `gpuCheck`) is reported at `<attribute path>.passthru`.
 
 ### Cost
 
@@ -115,6 +96,27 @@ For Nixpkgs 344693dcf336 and e58dcdca81f2 (aarch64-linux, 8 workers, on a busy m
 
 Packages and tests are one evaluation, so the package set is evaluated once; as separate evaluations, they took 25 and
 29 s, but peaked at 23.5 GB. Each report needs that memory, so `nnr` builds them one at a time (`--max-jobs 1`).
+
+Reports use 8 workers by default (`lib.nix`'s `workers`). For a packages report (aarch64-linux, 10 fast and 10 slow
+cores, a loaded machine), 4 workers took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and
+0.3-0.5 GB more memory.
+
+**Bounding memory.** iets can't free what a process has evaluated, so a report's memory only grows. With
+`maxMemorySize`, eval-jobs instead runs `workers` processes, each replaced once over that many MB, so the peak is about
+their product. Each process evaluates what the jobs share again, so it takes longer. For Nixpkgs ae2b13d55ef7
+(x86_64-linux, with CUDA) with tests, on 20 aarch64-linux cores:
+
+| Workers | Tests | Time | Peak |
+|---|---|---|---|
+| 8 threads (no limit) | all | 25.5 s | 31.1 GB |
+| 8 processes of 4096 MB (nix-eval-jobs' default) | all | 29.3 s | 31.1 GB |
+| 4 processes of 4096 MB | all | 39.9 s | 16.4 GB |
+| 8 threads (no limit) | `dotnetCorePackages` and `azure-cli-extensions` skipped | 20.8 s | 22.7 GB |
+| 8 processes of 2048 MB | the same skipped | 25.8 s | 15.2 GB |
+| 4 processes of 4096 MB | the same skipped | 33.0 s | 15.8 GB |
+
+The output was the same in each. Those two test sets allocate the most (by eval-jobs' per-job statistics), and skipping
+them changes no test with a `requiredSystemFeatures` of `cuda`.
 
 ## Diffs
 
@@ -176,9 +178,9 @@ For Nixpkgs e58dcdca81f2 against two commits before, with tests, that's 28,200 j
 
 ## iets
 
-[iets](https://github.com/numtide/iets) is a Nix evaluator in Rust. Reports use its `eval-jobs`
-(`--no-instantiate --max-memory-size 0`): one process, whose worker threads share one evaluation, computing
-derivation and output paths without a store. iets' own measurements (`docs/explanation/evaluation.md`, "Scaling
+[iets](https://github.com/numtide/iets) is a Nix evaluator in Rust. Reports use its `eval-jobs` with
+`--no-instantiate`, computing derivation and output paths without a store, and by default `--max-memory-size 0`: one
+process, whose worker threads share one evaluation. iets' own measurements (`docs/explanation/evaluation.md`, "Scaling
 limits") stop improving at about 6 workers; reports use 8. It's checked against Nix:
 
 - For Nixpkgs e58dcdca81f2 (aarch64-linux), `iets eval` of a walk of Nixpkgs recording each derivation's `outPath` gave

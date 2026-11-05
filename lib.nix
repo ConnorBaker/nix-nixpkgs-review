@@ -11,9 +11,7 @@ let
   # A tree's report: one JSON line per attribute eval-jobs walks, sorted:
   #   {"attrPath": [...], "outputs": {"out": "/nix/store/...", ...}}  for a derivation, or
   #   {"attrPath": [...], "error": "<the last error line>"}           for an attribute that failed to evaluate.
-  # A derivation with `requiredSystemFeatures` (e.g. a GPU check's [ "cuda" ]) has them too, as "requiredSystemFeatures",
-  # and one whose `meta.hydraPlatforms` (the systems Hydra builds it for, e.g. [ ] for a package too big to cache) is a
-  # list of systems has it as "hydraPlatforms".
+  # With `apply`, a derivation's line also has "extraValue", the result of `apply`.
   # eval-jobs evaluates each attribute on its own, so an error of any kind is only that attribute's. A fatal error (e.g.
   # a stack overflow) makes it exit 1, which fails the build.
   #
@@ -45,14 +43,13 @@ let
       # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (not for Nixpkgs,
       # where `pkgs.pkgs` is `pkgs`).
       forceRecurse ? false,
+      # A Nix function (as a string) eval-jobs applies to each derivation, whose result (an attribute set) the report
+      # keeps as "extraValue", e.g. "drv: { inherit (drv) requiredSystemFeatures; }".
+      apply ? null,
       # How eval-jobs evaluates: `workers` threads of one process with no memory limit (`maxMemorySize` 0), or
       # `workers` processes, each replaced once its memory goes above `maxMemorySize` MB. iets can't free what a process
-      # has evaluated, so a limit is the only way to bound a report's memory; its peak is then about `workers` times
-      # `maxMemorySize`, and each process evaluates what the jobs share again, so it takes longer. For a Nixpkgs report
-      # with tests (evalSystem x86_64-linux, with CUDA, on 20 aarch64-linux cores): 8 threads took 25.5 s with a peak of
-      # 31.1 GB; 4 processes of 4096 MB 39.9 s and 16.4 GB; 2 of 4096 MB 66.3 s and 8.2 GB. With fewer tests (two test
-      # sets skipped): 8 threads 20.8 s and 22.7 GB; 8 processes of 2048 MB 25.8 s and 15.2 GB; 4 of 4096 MB 33.0 s and
-      # 15.8 GB. So more, smaller processes are faster for the same memory.
+      # has evaluated, so a limit is the only way to bound a report's memory, at about `workers` times `maxMemorySize`;
+      # each process evaluates again what the jobs share, so it takes longer (see README.md, "Cost").
       workers ? 8,
       maxMemorySize ? 0,
     }:
@@ -72,13 +69,12 @@ let
           attrPath
           evalSystem
           forceRecurse
+          skipTests
           tests
           withCA
           withCUDA
           ;
-      }
-      # Only when given, so that reports without it are the same derivations as before it existed.
-      // lib.optionalAttrs (skipTests != { }) { inherit skipTests; };
+      };
     in
     assert lib.assertMsg (
       !(forceRecurse && settings.file == null)
@@ -94,20 +90,11 @@ let
       }
       # --impure: the tree and eval/ are store paths, which pure evaluation may not import.
       # --no-instantiate: compute the derivations' paths without writing them to a store (there is none).
-      # --max-memory-size 0 (the default `maxMemorySize`): one process, whose workers are threads sharing the
-      # evaluation, with no memory limit, rather than worker processes that each evaluate the tree again and restart at
-      # the limit.
-      # --workers 8 (the default `workers`): for a Nixpkgs packages report (aarch64-linux, 10 fast and 10 slow cores, a
-      # loaded machine), 4 workers took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and
-      # 0.3-0.5 GB more memory. iets' own measurements (docs/explanation/evaluation.md, "Scaling limits") stop
-      # improving at about 6.
       # env --ignore-environment: Nixpkgs reads the environment (e.g. drbd's `builtins.getEnv "SHELL"`), which in a
       # build is the builder's stdenv's, so without it a report would depend on the caller's Nixpkgs, not just on the
       # tree.
       # IETS_PROGRESS=0: no progress lines, so the log doesn't depend on timing. eval-jobs' last line has the counts
       # of jobs and errors, the time taken and the peak memory.
-      # --apply: each job's `requiredSystemFeatures` and `meta.hydraPlatforms`, as its `extraValue`. hydraPlatforms is
-      # null unless it's a list of systems: platform patterns (attribute sets) can hold functions, which JSON can't.
       # jq: each job's attribute path is its path in the tree (see eval/root.nix's `jobs`), and an error is its last
       # line.
       ''
@@ -118,13 +105,7 @@ let
           --max-memory-size ${toString maxMemorySize} \
           --workers ${toString workers} \
           ${lib.optionalString forceRecurse "--force-recurse"} \
-          --apply '
-            drv: {
-              requiredSystemFeatures = drv.requiredSystemFeatures or [ ];
-              hydraPlatforms =
-                let platforms = drv.meta.hydraPlatforms or null;
-                in if builtins.isList platforms && builtins.all builtins.isString platforms then platforms else null;
-            }' \
+          ${lib.optionalString (apply != null) "--apply ${lib.escapeShellArg apply}"} \
           --expr "(import ${./eval}/root.nix (builtins.fromJSON (builtins.readFile \"$NIX_ATTRS_JSON_FILE\")).settings).jobs" \
           > jobs.jsonl
 
@@ -134,12 +115,7 @@ let
             if .error then
               { error: (.error | split("\n") | map(select(test("^ *error: "))) | last // "?" | sub("^ *error: "; "")) }
             else
-              { outputs }
-              + (
-                (.extraValue.requiredSystemFeatures // []) as $features
-                | if $features == [] then {} else { requiredSystemFeatures: $features } end
-              )
-              + (if .extraValue.hydraPlatforms == null then {} else { hydraPlatforms: .extraValue.hydraPlatforms } end)
+              { outputs } + (if has("extraValue") then { extraValue } else {} end)
             end
           )
         ' jobs.jsonl \

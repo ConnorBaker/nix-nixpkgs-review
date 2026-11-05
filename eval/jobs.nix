@@ -7,8 +7,8 @@
 # and `hello.passthru.tests.version`), and nix-eval-jobs doesn't recurse into derivations. Hydra names the jobs of nested
 # attribute sets the same way.
 #
-# settings.json refers to the tree's store path, so its contents carry that path as context, which fromJSON refuses.
-# The tree is a runtime dependency of this directory, so discarding the context loses nothing.
+# settings.json refers to store paths (the tree's, and `nixpkgsArgs`), so its contents carry them as context, which
+# fromJSON refuses. They are runtime dependencies of this directory, so discarding the context loses nothing.
 let
   inherit
     (import ./root.nix (

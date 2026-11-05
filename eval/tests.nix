@@ -10,7 +10,7 @@
   # Whether to recurse into every attribute set of the tree, not just those with `recurseForDerivations`.
   forceRecurse,
   # More of the tree not to walk, as `skip` below (and added to it), e.g. `{ dotnetCorePackages = true; }`.
-  skipTests ? { },
+  skipTests,
 }:
 let
   inherit (builtins) isAttrs mapAttrs;
@@ -81,18 +81,15 @@ let
       null;
 
   # A value of the tree: a derivation's `passthru`, with what `ofPassthru` takes from it, or an attribute set's, recursed
-  # into.
+  # into. `passthru` is an attribute of its own (not checked for null here), so an error in it is reported at
+  # `<package>.passthru`, rather than at the package's own attribute path, where the diff would take the package's job
+  # for it.
   packages =
     ofPassthru: skipTree: value:
     if skipTree == true || !isAttrs value then
       null
     else if isDerivation value then
-      (
-        let
-          passthru = ofPassthru (descend skipTree "passthru") (value.passthru or { });
-        in
-        if passthru == null then null else recurse { inherit passthru; }
-      )
+      recurse { passthru = ofPassthru (descend skipTree "passthru") (value.passthru or { }); }
     else if forceRecurse || value.recurseForDerivations or false then
       recurse (mapSkip skipTree (packages ofPassthru) value)
     else
@@ -107,20 +104,16 @@ let
 
   gpuChecksOfPassthru =
     skipTree: passthru:
-    testsOf (
-      {
-        gpuCheck = if descend skipTree "gpuCheck" == true then null else test (passthru.gpuCheck or null);
-      }
-      // {
-        tests =
-          if passthru ? tests then
-            testsTree (
-              value: testsOf { gpuCheck = test (value.gpuCheck or null); }
-            ) 0 (descend skipTree "tests") passthru.tests
-          else
-            null;
-      }
-    );
+    testsOf {
+      gpuCheck = if descend skipTree "gpuCheck" == true then null else test (passthru.gpuCheck or null);
+      tests =
+        if passthru ? tests then
+          testsTree (
+            value: testsOf { gpuCheck = test (value.gpuCheck or null); }
+          ) 0 (descend skipTree "tests") passthru.tests
+        else
+          null;
+    };
 in
 root: {
   tests = recurse (mapSkip skip (packages testsOfPassthru) root);
