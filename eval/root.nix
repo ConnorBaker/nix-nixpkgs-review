@@ -14,7 +14,7 @@
   nixpkgsArgs,
   withCA,
   withCUDA,
-  # Whether `jobs` has the tree's `passthru.tests` (see ./tests.nix).
+  # Whether `jobs` has the tree's tests: its `passthru.tests` and GPU checks (see ./tests.nix).
   tests,
   # Whether to recurse into every attribute set, not just those with `recurseForDerivations`.
   forceRecurse,
@@ -53,13 +53,14 @@ let
   root = autoCall args (selectAlong args imported attrPath);
 in
 {
-  # The tree eval-jobs walks: the derivations under `packages`, and their tests under `tests`. The report drops that
-  # first attribute name, so each job's attribute path is its path in `root`.
+  # The tree eval-jobs walks: the derivations under `packages`, and with `tests`, their tests under `tests` and their
+  # GPU checks under `gpuChecks`. The report drops that first attribute name, so each job's attribute path is its path
+  # in `root`.
   jobs = {
     recurseForDerivations = true;
     packages = if builtins.isAttrs root then root // { recurseForDerivations = true; } else root;
   }
-  // (if tests then { tests = import ./tests.nix { inherit forceRecurse; } root; } else { });
+  // (if tests then import ./tests.nix { inherit forceRecurse; } root else { });
 
   # A job, by its attribute path in `root`, as eval-jobs reached it: it auto-calls every value it walks, with no
   # arguments.

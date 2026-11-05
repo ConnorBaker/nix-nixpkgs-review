@@ -32,7 +32,7 @@ nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --args
   with `callPackage` and an iets build; `hydraJobs.iets.<system>` is the flake's.
 - [`eval/root.nix`](./eval/root.nix) is what a report evaluates, from its settings (passed as JSON): Nixpkgs, configured
   by [`eval/nixpkgs.nix`](./eval/nixpkgs.nix) (or the caller's `nixpkgsArgs` file), or a file in the tree, called with
-  `args`; then `attrPath` selected. With `tests`, it adds the tree's `passthru.tests`, as
+  `args`; then `attrPath` selected. With `tests`, it adds the tree's `passthru.tests` and GPU checks, as
   [`eval/tests.nix`](./eval/tests.nix) gathers them.
 - [`diff.jq`](./diff.jq) compares two reports.
 - [`eval/jobs.nix`](./eval/jobs.nix) becomes the jobs' `default.nix`.
@@ -46,10 +46,12 @@ as release-lib does for its jobs.
 
 A tree's report is every job `eval-jobs` finds in it, as nix-eval-jobs and Hydra walk it: attribute sets with
 `recurseForDerivations` (or all of them, with `--force-recurse`) are recursed into, and functions are called with the
-arguments they have defaults for. It's one JSON line per attribute path, sorted, with a derivation's outputs, or the
-error the attribute failed to evaluate with:
+arguments they have defaults for. It's one JSON line per attribute path, sorted, with a derivation's outputs (and its
+`requiredSystemFeatures` if it has any, and its `meta.hydraPlatforms` if that's a list of systems), or the error the
+attribute failed to evaluate with:
 
 ```json
+{"attrPath":["cudaPackages","saxpy","passthru","gpuCheck"],"outputs":{"out":"/nix/store/…-saxpy-0-unstable-2023-07-11"},"requiredSystemFeatures":["cuda"]}
 {"attrPath":["hello"],"outputs":{"out":"/nix/store/nsq63r5qzvvlhhpmi5sa9hvs86j6mr8n-hello-2.12.3"}}
 {"attrPath":["hello","passthru","tests","version"],"outputs":{"out":"/nix/store/…-hello-test-version"}}
 {"attrPath":["zoom-us"],"error":"Refusing to evaluate package 'zoom-7.2.1.5760' in /nix/store/kc3dkdhlx5hz6mf3wg3szbnjrgbbrmyj-source/pkgs/by-name/zo/zoom-us/package.nix:138 because it has an unfree license (‘unfree’)"}
@@ -74,6 +76,10 @@ their paths in the tree (`hello.passthru.tests.version`):
 - Attribute sets within `passthru.tests` are recursed into, up to `passthru.tests.a.b.c`.
 - Only `passthru.tests` is looked at (the rest of `passthru` is full of dependencies and whole package sets), and a
   test's own `passthru.tests` isn't: tests are often overrides of the package, whose tests are more overrides.
+- GPU checks, as Nixpkgs' CUDA testing convention has them (`doc/languages-frameworks/cuda.section.md`), are tests too:
+  a derivation's `passthru.gpuCheck` (`cudaPackages.saxpy.passthru.gpuCheck`) and each test's `gpuCheck`
+  (`blender.passthru.tests.tester-cudaAvailable.gpuCheck`). Their `requiredSystemFeatures` (`[ "cuda" ]`) are in the
+  report, so a caller can pick out the tests that need a GPU.
 - NixOS tests (`nixosTests.*`, which many packages list) are skipped: computing their output path evaluates a NixOS
   system per node.
 - The Home Assistant component tests are skipped (`skip` in `eval/tests.nix`): each of the ~1,200 components lists all

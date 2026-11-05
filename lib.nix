@@ -11,6 +11,9 @@ let
   # A tree's report: one JSON line per attribute eval-jobs walks, sorted:
   #   {"attrPath": [...], "outputs": {"out": "/nix/store/...", ...}}  for a derivation, or
   #   {"attrPath": [...], "error": "<the last error line>"}           for an attribute that failed to evaluate.
+  # A derivation with `requiredSystemFeatures` (e.g. a GPU check's [ "cuda" ]) has them too, as "requiredSystemFeatures",
+  # and one whose `meta.hydraPlatforms` (the systems Hydra builds it for, e.g. [ ] for a package too big to cache) is a
+  # list of systems has it as "hydraPlatforms".
   # eval-jobs evaluates each attribute on its own, so an error of any kind is only that attribute's. A fatal error (e.g.
   # a stack overflow) makes it exit 1, which fails the build.
   #
@@ -34,7 +37,7 @@ let
       nixpkgsArgs ? null,
       withCA ? false,
       withCUDA ? false,
-      # Whether to evaluate `passthru.tests` too (see eval/tests.nix).
+      # Whether to evaluate the tests too: `passthru.tests` and GPU checks (see eval/tests.nix).
       tests ? false,
       # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (not for Nixpkgs,
       # where `pkgs.pkgs` is `pkgs`).
@@ -85,6 +88,8 @@ let
       # tree.
       # IETS_PROGRESS=0: no progress lines, so the log doesn't depend on timing. eval-jobs' last line has the counts
       # of jobs and errors, the time taken and the peak memory.
+      # --apply: each job's `requiredSystemFeatures` and `meta.hydraPlatforms`, as its `extraValue`. hydraPlatforms is
+      # null unless it's a list of systems: platform patterns (attribute sets) can hold functions, which JSON can't.
       # jq: each job's attribute path is its path in the tree (see eval/root.nix's `jobs`), and an error is its last
       # line.
       ''
@@ -95,6 +100,13 @@ let
           --max-memory-size 0 \
           --workers 8 \
           ${lib.optionalString forceRecurse "--force-recurse"} \
+          --apply '
+            drv: {
+              requiredSystemFeatures = drv.requiredSystemFeatures or [ ];
+              hydraPlatforms =
+                let platforms = drv.meta.hydraPlatforms or null;
+                in if builtins.isList platforms && builtins.all builtins.isString platforms then platforms else null;
+            }' \
           --expr "(import ${./eval}/root.nix (builtins.fromJSON (builtins.readFile \"$NIX_ATTRS_JSON_FILE\")).settings).jobs" \
           > jobs.jsonl
 
@@ -105,6 +117,11 @@ let
               { error: (.error | split("\n") | map(select(test("^ *error: "))) | last // "?" | sub("^ *error: "; "")) }
             else
               { outputs }
+              + (
+                (.extraValue.requiredSystemFeatures // []) as $features
+                | if $features == [] then {} else { requiredSystemFeatures: $features } end
+              )
+              + (if .extraValue.hydraPlatforms == null then {} else { hydraPlatforms: .extraValue.hydraPlatforms } end)
             end
           )
         ' jobs.jsonl \

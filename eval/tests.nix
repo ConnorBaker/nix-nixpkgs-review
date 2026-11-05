@@ -1,7 +1,11 @@
-# The tests of a tree, as a tree for eval-jobs: each derivation becomes `{ passthru.tests = <its tests>; }`, so a test's
-# attribute path is its path in the tree (e.g. `hello.passthru.tests.version`). Only `passthru.tests` is looked at: the
-# rest of `passthru` is full of dependencies and whole package sets. A test's own `passthru.tests` isn't either: tests
-# are often overrides of the package, whose tests are more overrides.
+# The tests of a tree, as two trees for eval-jobs, each with a test's attribute path as its path in the tree:
+# - `tests`: each derivation's `passthru.tests` (e.g. `hello.passthru.tests.version`). Only `passthru.tests` is looked
+#   at: the rest of `passthru` is full of dependencies and whole package sets. A test's own `passthru.tests` isn't
+#   either: tests are often overrides of the package, whose tests are more overrides.
+# - `gpuChecks`: the GPU checks of Nixpkgs' CUDA testing convention (doc/languages-frameworks/cuda.section.md): a
+#   derivation's `passthru.gpuCheck` (e.g. `cudaPackages.saxpy.passthru.gpuCheck`), and the `gpuCheck` of each of its
+#   tests (e.g. `blender.passthru.tests.tester-cudaAvailable.gpuCheck`, as `writeGpuTestPython` makes them). A test's
+#   `gpuCheck` is in a tree of its own because the test is a job too, and eval-jobs doesn't recurse into derivations.
 {
   # Whether to recurse into every attribute set of the tree, not just those with `recurseForDerivations`.
   forceRecurse,
@@ -32,6 +36,19 @@ let
   # system of each of their nodes, so computing it evaluates a NixOS system per node.
   isNixOSTest = value: value ? driver && value ? nodes;
 
+  # A derivation that is a test, or null.
+  test = value: if isDerivation value && !isNixOSTest value then value else null;
+
+  # An attribute set of the tests (as `test`) that aren't null, or null if there are none.
+  testsOf =
+    attrs:
+    let
+      present = builtins.removeAttrs attrs (
+        builtins.filter (name: attrs.${name} == null) (builtins.attrNames attrs)
+      );
+    in
+    if present == { } then null else recurse present;
+
   recurse = attrs: attrs // { recurseForDerivations = true; };
 
   # The part of `skip` below an attribute name; `true` (everything is skipped) stays `true`.
@@ -40,37 +57,62 @@ let
   # mapAttrs, with what is skipped below each name.
   mapSkip = skipTree: f: mapAttrs (name: f (descend skipTree name));
 
-  # A value within `passthru.tests` at the given depth (`passthru.tests` itself is at depth 0).
-  tests =
-    depth: skipTree: value:
+  # A value within `passthru.tests` at the given depth (`passthru.tests` itself is at depth 0), with `leaf` applied to
+  # each test, a derivation.
+  testsTree =
+    leaf: depth: skipTree: value:
     if skipTree == true || !isAttrs value then
       null
     else if isDerivation value then
-      (if isNixOSTest value then null else value)
+      (if isNixOSTest value then null else leaf value)
     else if depth < maxDepth then
-      recurse (mapSkip skipTree (tests (depth + 1)) value)
+      recurse (mapSkip skipTree (testsTree leaf (depth + 1)) value)
     else
       null;
 
-  # A value of the tree: a derivation's tests, or an attribute set's, recursed into.
+  # A value of the tree: a derivation's `passthru`, with what `ofPassthru` takes from it, or an attribute set's, recursed
+  # into.
   packages =
-    skipTree: value:
+    ofPassthru: skipTree: value:
     if skipTree == true || !isAttrs value then
       null
     else if isDerivation value then
       (
-        if value ? passthru.tests then
-          recurse {
-            passthru = recurse {
-              tests = tests 0 (descend (descend skipTree "passthru") "tests") value.passthru.tests;
-            };
-          }
-        else
-          null
+        let
+          passthru = ofPassthru (descend skipTree "passthru") (value.passthru or { });
+        in
+        if passthru == null then null else recurse { inherit passthru; }
       )
     else if forceRecurse || value.recurseForDerivations or false then
-      recurse (mapSkip skipTree packages value)
+      recurse (mapSkip skipTree (packages ofPassthru) value)
     else
       null;
+
+  testsOfPassthru =
+    skipTree: passthru:
+    if passthru ? tests then
+      recurse { tests = testsTree (value: value) 0 (descend skipTree "tests") passthru.tests; }
+    else
+      null;
+
+  gpuChecksOfPassthru =
+    skipTree: passthru:
+    testsOf (
+      {
+        gpuCheck = if descend skipTree "gpuCheck" == true then null else test (passthru.gpuCheck or null);
+      }
+      // {
+        tests =
+          if passthru ? tests then
+            testsTree (
+              value: testsOf { gpuCheck = test (value.gpuCheck or null); }
+            ) 0 (descend skipTree "tests") passthru.tests
+          else
+            null;
+      }
+    );
 in
-root: recurse (mapSkip skip packages root)
+root: {
+  tests = recurse (mapSkip skip (packages testsOfPassthru) root);
+  gpuChecks = recurse (mapSkip skip (packages gpuChecksOfPassthru) root);
+}
