@@ -62,9 +62,9 @@ error the attribute failed to evaluate with:
 - eval-jobs evaluates each attribute on its own, so an error of any kind (not just what `tryEval` catches: a missing
   attribute, calling a function with an argument it doesn't take, `abort`) is only that attribute's. Only a fatal error
   (e.g. a stack overflow) fails a report.
-- A report is a derivation of its tree, its settings, iets and this repository's `eval/` (it's named after the commit,
-  e.g. `report-e58dcdca81f2`), so a commit's report is built once and reused by every comparison with it, until
-  garbage-collected.
+- A report is a derivation of its tree, its settings, iets and this repository's `eval/` (it's named after the commit
+  and settings, e.g. `report-e58dcdca81f2-aarch64-linux-tests`), so a commit's report is built once and reused by every
+  comparison with it, even by different callers, until garbage-collected.
 - With `lib.nix`'s `apply` (a Nix function, as for `eval-jobs --apply`), each derivation's line also has `extraValue`,
   what the function returns for it (e.g. its `requiredSystemFeatures`).
 - With `lib.nix`'s `extraJobs` (a Nix file), the walk also covers the jobs that file returns for the tree, at their

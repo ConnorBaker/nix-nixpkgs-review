@@ -16,12 +16,13 @@ let
   # a stack overflow) makes it exit 1, which fails the build.
   #
   # A report is a derivation of the tree and its arguments, so a tree's report is built once and reused by every
-  # comparison with it.
+  # comparison with it, whoever asks for it. So is its name: "report-<commit>-<evalSystem>", with "-cuda", "-ca" and
+  # "-tests" for those settings, e.g. "report-ae2b13d55ef7-x86_64-linux-cuda".
   mkReport =
     {
-      # The derivation's name is "report-${label}".
-      label,
-      # The tree (a path or store path).
+      # The tree (a path or store path), or a git checkout of it: an attribute set with `outPath` and `rev` (or
+      # `dirtyRev`), as `builtins.fetchGit` and Hydra's git inputs are. Without a commit, the name has the store path's
+      # hash instead.
       tree,
       # What to evaluate (see eval/root.nix): without `file`, a tree with pkgs/top-level/all-packages.nix is Nixpkgs,
       # and any other tree's is default.nix. `args` reach the evaluation as JSON, so their values can be anything JSON
@@ -82,6 +83,24 @@ let
           withCUDA
           ;
       };
+
+      # The commit's first 12 characters, with "-dirty" for a working tree (for which fetchGit's `rev` is all zeros).
+      commit =
+        if tree ? dirtyRev then
+          "${builtins.substring 0 12 tree.dirtyRev}-dirty"
+        else if tree ? rev then
+          builtins.substring 0 12 tree.rev
+        else
+          builtins.substring 11 12 (builtins.unsafeDiscardStringContext settings.tree);
+      label = lib.concatStringsSep "-" (
+        [
+          commit
+          evalSystem
+        ]
+        ++ lib.optional withCUDA "cuda"
+        ++ lib.optional withCA "ca"
+        ++ lib.optional tests "tests"
+      );
     in
     assert lib.assertMsg (
       !(forceRecurse && settings.file == null)
