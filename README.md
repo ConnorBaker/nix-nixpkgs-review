@@ -38,8 +38,8 @@ nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --args
 - [`eval/jobs.nix`](./eval/jobs.nix) becomes the jobs' `default.nix`.
 
 Nothing here is a stable interface. Its other users are the [nixos-cuda](https://github.com/nixos-cuda) Hydra's
-jobsets (nixos-cuda/hydra-jobsets), which call `lib.nix` with a build of `hydraJobs.iets` and their own `nixpkgsArgs`,
-so that the reports evaluate Nixpkgs as release-lib does for their jobs.
+jobsets (nixos-cuda/hydra-jobsets), which call `lib.nix` with a build of `hydraJobs.iets`, their own `nixpkgsArgs`, and
+`extraJobs` for the jobs Nixpkgs' `release.nix` adds outside the package set's walk.
 
 ## Reports
 
@@ -62,10 +62,13 @@ error the attribute failed to evaluate with:
 - eval-jobs evaluates each attribute on its own, so an error of any kind (not just what `tryEval` catches: a missing
   attribute, calling a function with an argument it doesn't take, `abort`) is only that attribute's. Only a fatal error
   (e.g. a stack overflow) fails a report.
-- A report depends only on its tree and settings (it's named after the commit, e.g. `report-e58dcdca81f2`), so a
-  commit's report is built once and reused by every comparison with it, until garbage-collected.
+- A report is a derivation of its tree, its settings, iets and this repository's `eval/` (it's named after the commit,
+  e.g. `report-e58dcdca81f2`), so a commit's report is built once and reused by every comparison with it, until
+  garbage-collected.
 - With `lib.nix`'s `apply` (a Nix function, as for `eval-jobs --apply`), each derivation's line also has `extraValue`,
   what the function returns for it (e.g. its `requiredSystemFeatures`).
+- With `lib.nix`'s `extraJobs` (a Nix file), the walk also covers the jobs that file returns for the tree, at their
+  attribute paths in it (e.g. `haskell.packages.ghc96.haskell-language-server`, which the walk doesn't reach).
 
 ### Tests
 
@@ -86,7 +89,8 @@ their paths in the tree (`hello.passthru.tests.version`):
 - `lib.nix`'s `skipTests` skips more, for a caller that needs only some tests.
 
 Nixpkgs' CI evaluates packages but not their tests, so tests that fail to evaluate aren't rare; they're errors like any
-other. An error in a derivation's `passthru` (or its `gpuCheck`) is reported at `<attribute path>.passthru`.
+other. An error in a derivation's `passthru` is reported at `<attribute path>.passthru`, and one in a GPU check at the
+check's own attribute path.
 
 ### Cost
 
@@ -97,12 +101,11 @@ For Nixpkgs 344693dcf336 and e58dcdca81f2 (aarch64-linux, 8 workers, on a busy m
 Packages and tests are one evaluation, so the package set is evaluated once; as separate evaluations, they took 25 and
 29 s, but peaked at 23.5 GB. Each report needs that memory, so `nnr` builds them one at a time (`--max-jobs 1`).
 
-Reports use 8 workers by default (`lib.nix`'s `workers`). For a packages report (aarch64-linux, 10 fast and 10 slow
-cores, a loaded machine), 4 workers took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and
-0.3-0.5 GB more memory.
+Reports use 8 workers. For a packages report (aarch64-linux, 10 fast and 10 slow cores, a loaded machine), 4 workers
+took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and 0.3-0.5 GB more memory.
 
 **Bounding memory.** iets can't free what a process has evaluated, so a report's memory only grows. With
-`maxMemorySize`, eval-jobs instead runs `workers` processes, each replaced once over that many MB, so the peak is about
+`maxMemorySize`, eval-jobs instead runs 8 processes, each replaced once over that many MB, so the peak is about
 their product. Each process evaluates what the jobs share again, so it takes longer. For Nixpkgs ae2b13d55ef7
 (x86_64-linux, with CUDA) with tests, on 20 aarch64-linux cores:
 
@@ -115,8 +118,7 @@ their product. Each process evaluates what the jobs share again, so it takes lon
 | 8 processes of 2048 MB | the same skipped | 25.8 s | 15.2 GB |
 | 4 processes of 4096 MB | the same skipped | 33.0 s | 15.8 GB |
 
-The output was the same in each. Those two test sets allocate the most (by eval-jobs' per-job statistics), and skipping
-them changes no test with a `requiredSystemFeatures` of `cuda`.
+The output was the same in each, but for the skipped tests.
 
 ## Diffs
 
@@ -150,7 +152,7 @@ What `nnr` prints, `lib.mkReview`'s result, is a directory:
 - `default.nix`: an attribute set from each added, changed or fixed attribute path, joined with dots (e.g.
   `"python3Packages.torch"`, `"hello.passthru.tests.version"`), to its value in the second tree. It's flat, rather than
   nested, because a derivation can both be a job and contain jobs (`hello` and `hello.passthru.tests.version`), and
-  nix-eval-jobs doesn't recurse into derivations; Hydra names nested jobs the same way. It evaluates in pure mode.
+  nix-eval-jobs doesn't recurse into derivations; Hydra names nested jobs the same way.
 - `root.nix`, `nixpkgs.nix`, `tests.nix` and `settings.json`: what the second tree's report evaluated, so that each job
   is selected exactly as the report reached it, auto-calling functions along the way.
 - `changed.json`: the attribute paths, as a JSON list of lists.
@@ -174,7 +176,7 @@ For Nixpkgs e58dcdca81f2 against two commits before, with tests, that's 28,200 j
   `fetchTarball`, or flake inputs) or uses import-from-derivation fails. `--arg` values reach the evaluation as JSON,
   so they can only be JSON values or paths, e.g.
   `--arg nixpkgs 'builtins.fetchGit { url = "/path/to/nixpkgs"; rev = "…"; }'`. A function is called with `args` only
-  if it takes an attribute set by name (`{ a, b }:`); `{ }:` and `x:` are left as they are.
+  if it takes an attribute set by name (`{ a, b }:`); `{ }:` and `x:` are left as they are (Nix calls `{ }:`).
 
 ## iets
 

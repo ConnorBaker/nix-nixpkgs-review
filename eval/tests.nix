@@ -49,16 +49,6 @@ let
   # A derivation that is a test, or null.
   test = value: if isDerivation value && !isNixOSTest value then value else null;
 
-  # An attribute set of the tests (as `test`) that aren't null, or null if there are none.
-  testsOf =
-    attrs:
-    let
-      present = builtins.removeAttrs attrs (
-        builtins.filter (name: attrs.${name} == null) (builtins.attrNames attrs)
-      );
-    in
-    if present == { } then null else recurse present;
-
   recurse = attrs: attrs // { recurseForDerivations = true; };
 
   # The part of `skip` below an attribute name; `true` (everything is skipped) stays `true`.
@@ -104,12 +94,12 @@ let
 
   gpuChecksOfPassthru =
     skipTree: passthru:
-    testsOf {
+    recurse {
       gpuCheck = if descend skipTree "gpuCheck" == true then null else test (passthru.gpuCheck or null);
       tests =
         if passthru ? tests then
           testsTree (
-            value: testsOf { gpuCheck = test (value.gpuCheck or null); }
+            value: recurse { gpuCheck = test (value.gpuCheck or null); }
           ) 0 (descend skipTree "tests") passthru.tests
         else
           null;

@@ -15,7 +15,7 @@ let
   # eval-jobs evaluates each attribute on its own, so an error of any kind is only that attribute's. A fatal error (e.g.
   # a stack overflow) makes it exit 1, which fails the build.
   #
-  # A report depends only on its name, the tree and the settings, so a tree's report is built once and reused by every
+  # A report is a derivation of the tree and its arguments, so a tree's report is built once and reused by every
   # comparison with it.
   mkReport =
     {
@@ -30,7 +30,8 @@ let
       attrPath ? [ ],
       args ? { },
       # For Nixpkgs: the system to evaluate it for, and its arguments, as a Nix file whose function takes
-      # `{ withCA, withCUDA }` (default: eval/nixpkgs.nix).
+      # `{ withCA, withCUDA }` (default: eval/nixpkgs.nix). The file is copied to the store on its own, so it can't
+      # import files next to it.
       evalSystem,
       nixpkgsArgs ? null,
       withCA ? false,
@@ -40,17 +41,22 @@ let
       # With `tests`: the packages whose tests not to walk, nested like the tree, with `true` for each attribute path to
       # skip and everything below it, e.g. `{ dotnetCorePackages = true; }` (added to eval/tests.nix's own `skip`).
       skipTests ? { },
+      # Jobs the walk doesn't reach, as a Nix file (copied to the store on its own) whose function takes what is
+      # evaluated (after `attrPath`) and returns an attribute set for eval-jobs to walk, with `recurseForDerivations`
+      # set on each attribute set to recurse into. A job's attribute path in it must be its path in what is evaluated
+      # (e.g. `{ haskell.packages.ghc96 = { inherit (pkgs.haskell.packages.ghc96) haskell-language-server; }; }`), as
+      # that is where mkJobs finds it. A job the walk reaches too is in the report once (with `sort --unique`).
+      extraJobs ? null,
       # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (not for Nixpkgs,
       # where `pkgs.pkgs` is `pkgs`).
       forceRecurse ? false,
       # A Nix function (as a string) eval-jobs applies to each derivation, whose result (an attribute set) the report
       # keeps as "extraValue", e.g. "drv: { inherit (drv) requiredSystemFeatures; }".
       apply ? null,
-      # How eval-jobs evaluates: `workers` threads of one process with no memory limit (`maxMemorySize` 0), or
-      # `workers` processes, each replaced once its memory goes above `maxMemorySize` MB. iets can't free what a process
-      # has evaluated, so a limit is the only way to bound a report's memory, at about `workers` times `maxMemorySize`;
-      # each process evaluates again what the jobs share, so it takes longer (see README.md, "Cost").
-      workers ? 8,
+      # With 0, eval-jobs evaluates in one process with no memory limit. Otherwise, in 8 processes, each replaced once
+      # its memory goes above `maxMemorySize` MB, so that the report's memory stays under about 8 times that. iets can't
+      # free what a process has evaluated, so this is the only way to bound it; each process evaluates again what the
+      # jobs share, so it takes longer.
       maxMemorySize ? 0,
     }:
     let
@@ -64,6 +70,7 @@ let
           else
             "default.nix";
         nixpkgsArgs = if nixpkgsArgs == null then null else "${nixpkgsArgs}";
+        extraJobs = if extraJobs == null then null else "${extraJobs}";
         inherit
           args
           attrPath
@@ -79,31 +86,34 @@ let
     assert lib.assertMsg (
       !(forceRecurse && settings.file == null)
     ) "forceRecurse is for a file: Nixpkgs (e.g. `pkgs.pkgs`) would never finish";
+    assert lib.assertMsg (
+      settings.file == null || !(withCA || withCUDA || nixpkgsArgs != null)
+    ) "withCA, withCUDA and nixpkgsArgs are for Nixpkgs, not ${settings.file}";
     assert lib.assertMsg (skipTests == { } || tests) "skipTests is for a report with tests";
     runCommand "report-${label}"
       {
         __structuredAttrs = true;
-        strictDeps = true;
         nativeBuildInputs = [ jq ];
         inherit settings;
         passthru = { inherit label settings; };
       }
       # --impure: the tree and eval/ are store paths, which pure evaluation may not import.
       # --no-instantiate: compute the derivations' paths without writing them to a store (there is none).
+      # --workers 8: more, smaller processes are faster for the same memory (see README.md, "Cost").
       # env --ignore-environment: Nixpkgs reads the environment (e.g. drbd's `builtins.getEnv "SHELL"`), which in a
       # build is the builder's stdenv's, so without it a report would depend on the caller's Nixpkgs, not just on the
       # tree.
       # IETS_PROGRESS=0: no progress lines, so the log doesn't depend on timing. eval-jobs' last line has the counts
       # of jobs and errors, the time taken and the peak memory.
       # jq: each job's attribute path is its path in the tree (see eval/root.nix's `jobs`), and an error is its last
-      # line.
+      # `error:` line (or all of it, without one).
       ''
         env --ignore-environment HOME="$HOME" TMPDIR="$TMPDIR" IETS_PROGRESS=0 \
           ${iets}/bin/iets eval-jobs \
           --impure \
           --no-instantiate \
           --max-memory-size ${toString maxMemorySize} \
-          --workers ${toString workers} \
+          --workers 8 \
           ${lib.optionalString forceRecurse "--force-recurse"} \
           ${lib.optionalString (apply != null) "--apply ${lib.escapeShellArg apply}"} \
           --expr "(import ${./eval}/root.nix (builtins.fromJSON (builtins.readFile \"$NIX_ATTRS_JSON_FILE\")).settings).jobs" \
@@ -113,13 +123,13 @@ let
           { attrPath: .attrPath[1:] }
           + (
             if .error then
-              { error: (.error | split("\n") | map(select(test("^ *error: "))) | last // "?" | sub("^ *error: "; "")) }
+              { error: (.error | (split("\n") | map(select(test("^ *error: "))) | last | values | sub("^ *error: "; "")) // .) }
             else
               { outputs } + (if has("extraValue") then { extraValue } else {} end)
             end
           )
         ' jobs.jsonl \
-          | LC_ALL=C sort > "$out"
+          | LC_ALL=C sort --unique > "$out"
       '';
 
   # The jobs: what changed from one report (`pre`) to another (`post`), as a directory with
@@ -129,25 +139,14 @@ let
   # - changed.json, their attribute paths;
   # - diff.json, the diff of the reports (see ./diff.jq).
   mkJobs =
-    {
-      pre,
-      post,
-      # Derivations to build first. For a caller that reads the result during evaluation (import-from-derivation):
-      # every report it reads, so that the first diff it reads has them all built at once, in parallel, rather than
-      # each read waiting for its own.
-      after ? [ ],
-    }:
+    { pre, post }:
     runCommand "jobs-${pre.label}-${post.label}"
-      (
-        {
-          __structuredAttrs = true;
-          strictDeps = true;
-          nativeBuildInputs = [ jq ];
-          inherit pre post;
-          inherit (post) settings;
-        }
-        // lib.optionalAttrs (after != [ ]) { inherit after; }
-      )
+      {
+        __structuredAttrs = true;
+        nativeBuildInputs = [ jq ];
+        inherit pre post;
+        inherit (post) settings;
+      }
       ''
         mkdir "$out"
         cp ${./eval}/{nixpkgs,root,tests}.nix "$out/"

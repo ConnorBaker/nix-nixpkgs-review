@@ -18,12 +18,15 @@
   tests,
   # With `tests`: the packages whose tests not to walk, as ./tests.nix's `skip` (and added to it).
   skipTests,
+  # A Nix file (a store path) whose function takes `root` and returns more jobs, or null.
+  extraJobs,
   # Whether to recurse into every attribute set, not just those with `recurseForDerivations`.
   forceRecurse,
 }:
 let
   # As Nix auto-calls a value (eval.cc:autoCallFunction): a function taking an attribute set is called with the
-  # attributes of `args` it takes, and a `__functor` set is called through its functor.
+  # attributes of `args` it takes, and a `__functor` set is called through its functor. A function taking `{ }` (no
+  # attributes) is left alone, unlike Nix, which calls it.
   autoCall =
     args: f:
     if builtins.isFunction f then
@@ -55,13 +58,23 @@ let
   root = autoCall args (selectAlong args imported attrPath);
 in
 {
-  # The tree eval-jobs walks: the derivations under `packages`, and with `tests`, their tests under `tests` and their
-  # GPU checks under `gpuChecks`. The report drops that first attribute name, so each job's attribute path is its path
-  # in `root`.
+  # The tree eval-jobs walks: the derivations under `packages`, with `extraJobs`, its jobs under `extra`, and with
+  # `tests`, their tests under `tests` and their GPU checks under `gpuChecks`. The report drops that first attribute
+  # name, so each job's attribute path is its path in `root` (or in `extraJobs`' attribute set).
   jobs = {
     recurseForDerivations = true;
     packages = if builtins.isAttrs root then root // { recurseForDerivations = true; } else root;
   }
+  // (
+    if extraJobs == null then
+      { }
+    else
+      {
+        extra = import extraJobs root // {
+          recurseForDerivations = true;
+        };
+      }
+  )
   // (if tests then import ./tests.nix { inherit forceRecurse skipTests; } root else { });
 
   # A job, by its attribute path in `root`, as eval-jobs reached it: it auto-calls every value it walks, with no
