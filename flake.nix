@@ -44,8 +44,15 @@
           };
         };
 
-      # What changed between two trees of a git repository (see review.nix); `packages.nnr` resolves the revisions.
-      flake.lib.mkReview = import ./review.nix { inherit (inputs) iets nixpkgs; };
+      flake = {
+        # What changed between two trees of a git repository (see review.nix); `packages.nnr` resolves the revisions.
+        lib.mkReview = import ./review.nix { inherit (inputs) iets nixpkgs; };
+
+        # The iets the reports use, for a Hydra jobset that calls lib.nix with it (as a `build` input).
+        hydraJobs.iets = inputs.nixpkgs.lib.genAttrs [ "aarch64-linux" "x86_64-linux" ] (
+          system: inputs.iets.packages.${system}.default
+        );
+      };
 
       partitionedAttrs = {
         checks = "dev";

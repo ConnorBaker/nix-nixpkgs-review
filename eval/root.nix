@@ -1,4 +1,4 @@
-# What nnr evaluates in a tree, from its settings (see ../review.nix): the tree imported as Nixpkgs, or a file in it
+# What nnr evaluates in a tree, from its settings (see ../lib.nix): the tree imported as Nixpkgs, or a file in it
 # called with `args`, then `attrPath` selected.
 {
   # The tree, a store path.
@@ -8,8 +8,10 @@
   # What `file`'s function (and every function along `attrPath`) is called with, as `nix-build --arg` does.
   args,
   attrPath,
-  # For Nixpkgs: the system to import it for, and its configuration (see ./nixpkgs.nix).
+  # For Nixpkgs: the system to import it for, and its arguments: a Nix file (a store path) whose function takes
+  # `{ withCA, withCUDA }`, or null for ./nixpkgs.nix.
   evalSystem,
+  nixpkgsArgs,
   withCA,
   withCUDA,
   # Whether `jobs` has the tree's `passthru.tests` (see ./tests.nix).
@@ -39,7 +41,12 @@ let
 
   imported =
     if file == null then
-      import tree ({ system = evalSystem; } // import ./nixpkgs.nix { inherit withCA withCUDA; })
+      import tree (
+        {
+          system = evalSystem;
+        }
+        // import (if nixpkgsArgs == null then ./nixpkgs.nix else nixpkgsArgs) { inherit withCA withCUDA; }
+      )
     else
       import "${tree}/${file}";
 

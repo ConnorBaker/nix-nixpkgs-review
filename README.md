@@ -25,15 +25,22 @@ nix run github:ConnorBaker/nix-nixpkgs-review -- . -f release.nix -A jobs --args
 
 - [`nnr.sh`](./nnr.sh) is the command line (`packages.nnr`, the flake's default package). It resolves the revisions
   with git, turns its options into `lib.mkReview`'s arguments, and builds that.
-- [`review.nix`](./review.nix) is `lib.mkReview`: it reads each tree with `builtins.fetchGit`, makes its
-  [report](#reports) in a derivation that runs `iets eval-jobs`, and makes the [jobs](#jobs) from the two reports.
+- [`review.nix`](./review.nix) is `lib.mkReview`: it reads each tree with `builtins.fetchGit`, and makes their
+  reports and the jobs with `lib.nix`.
+- [`lib.nix`](./lib.nix) has the derivations, for a caller with the trees as paths: `mkReport` makes a tree's
+  [report](#reports) by running `iets eval-jobs`, and `mkJobs` makes the [jobs](#jobs) from two reports. It's called
+  with `callPackage` and an iets build; `hydraJobs.iets.<system>` is the flake's.
 - [`eval/root.nix`](./eval/root.nix) is what a report evaluates, from its settings (passed as JSON): Nixpkgs, configured
-  by [`eval/nixpkgs.nix`](./eval/nixpkgs.nix), or a file in the tree, called with `args`; then `attrPath` selected. With
-  `tests`, it adds the tree's `passthru.tests`, as [`eval/tests.nix`](./eval/tests.nix) gathers them.
+  by [`eval/nixpkgs.nix`](./eval/nixpkgs.nix) (or the caller's `nixpkgsArgs` file), or a file in the tree, called with
+  `args`; then `attrPath` selected. With `tests`, it adds the tree's `passthru.tests`, as
+  [`eval/tests.nix`](./eval/tests.nix) gathers them.
 - [`diff.jq`](./diff.jq) compares two reports.
 - [`eval/jobs.nix`](./eval/jobs.nix) becomes the jobs' `default.nix`.
 
-Nothing here is a stable interface.
+Nothing here is a stable interface. Its other user is the [nixos-cuda](https://github.com/nixos-cuda) Hydra's pull
+request jobset (`jobsets/nixpkgs-pr.nix` in nixos-cuda/hydra-jobsets), which calls `lib.nix` with the `tools`
+jobset's build of `hydraJobs.iets`, as a `build` input, and its own `nixpkgsArgs`, so that the reports evaluate Nixpkgs
+as release-lib does for its jobs.
 
 ## Reports
 
@@ -154,7 +161,7 @@ limits") stop improving at about 6 workers; reports use 8. It's checked against 
   output byte-identical to Determinate Nix's.
 - `eval-jobs`' packages have the same lines as nix-eval-jobs 2.34.3 (C++ Nix) for the same tree, but for one:
   `gnomeExtensions.1440`, an all-digit attribute name, which iets selects and nix-eval-jobs fails on. (drbd also
-  differed, because it reads `$SHELL`; see `review.nix`.)
+  differed, because it reads `$SHELL`; see `lib.nix`.)
 - On the tests, the differences were nix-eval-jobs failing where iets didn't: on a test needing a store
   (`options-doc-regression`), and on all-digit attribute names.
 

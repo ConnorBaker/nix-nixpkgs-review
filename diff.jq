@@ -1,4 +1,4 @@
-# The diff of two trees' reports (see review.nix). Run with --null-input and --slurpfile pre / --slurpfile post, each the
+# The diff of two trees' reports (see lib.nix). Run with --null-input and --slurpfile pre / --slurpfile post, each the
 # lines of one tree's report.
 #
 # Yields the attribute paths, each sorted, of the derivations
