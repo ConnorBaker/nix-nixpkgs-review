@@ -50,7 +50,9 @@ let
       # has evaluated, so a limit is the only way to bound a report's memory; its peak is then about `workers` times
       # `maxMemorySize`, and each process evaluates what the jobs share again, so it takes longer. For a Nixpkgs report
       # with tests (evalSystem x86_64-linux, with CUDA, on 20 aarch64-linux cores): 8 threads took 25.5 s with a peak of
-      # 31.1 GB; 4 processes of 4096 MB 39.9 s and 16.4 GB; 2 of 4096 MB 66.3 s and 8.2 GB.
+      # 31.1 GB; 4 processes of 4096 MB 39.9 s and 16.4 GB; 2 of 4096 MB 66.3 s and 8.2 GB. With fewer tests (two test
+      # sets skipped): 8 threads 20.8 s and 22.7 GB; 8 processes of 2048 MB 25.8 s and 15.2 GB; 4 of 4096 MB 33.0 s and
+      # 15.8 GB. So more, smaller processes are faster for the same memory.
       workers ? 8,
       maxMemorySize ? 0,
     }:

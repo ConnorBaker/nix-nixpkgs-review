@@ -100,7 +100,9 @@ A report can't free what it has evaluated (iets can't), so its memory only grows
 - Each process evaluates what the jobs share again, so it takes longer. For that report with tests, on 20
   aarch64-linux cores:
   - 4 processes of 4096 MB took 39.9 s with a peak of 16.4 GB, against 25.5 s and 31.1 GB with 8 threads;
-  - 8 processes of 4096 MB (nix-eval-jobs' default) saved nothing: 31.1 GB.
+  - 8 processes of 4096 MB (nix-eval-jobs' default) saved nothing: 31.1 GB;
+  - with the two test sets above skipped, 8 processes of 2048 MB took 25.8 s with a peak of 15.2 GB, and 4 of 4096 MB
+    33.0 s and 15.8 GB: more, smaller processes are faster for the same memory.
 
 Nixpkgs' CI evaluates packages but not their tests, so tests that fail to evaluate aren't rare; they're errors like any
 other.
