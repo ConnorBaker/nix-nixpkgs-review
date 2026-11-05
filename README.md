@@ -158,16 +158,10 @@ limits") stop improving at about 6 workers; reports use 8. It's checked against 
 - On the tests, the differences were nix-eval-jobs failing where iets didn't: on a test needing a store
   (`options-doc-regression`), and on all-digit attribute names.
 
-The `iets` input is a branch of a fork, `ConnorBaker/iets` `nix-nixpkgs-review`: upstream main with two fixes, until
-they're merged:
-
-- [numtide/iets#354](https://github.com/numtide/iets/pull/354): auto-call an attribute set with `__functor` (what
-  `callPackage` returns), as Nix does; without it, eval-jobs skips e.g. `androidenv.composeAndroidPackages`.
-- [numtide/iets#355](https://github.com/numtide/iets/pull/355): an intermittent abort at exit
-  (`RefCell already borrowed`), after the output is written, which fails a report.
-
-To update it, rebase the branch onto upstream main (or switch the input back to `github:numtide/iets` once both are
-merged), then `nix flake update iets`.
+The `iets` input is upstream main; update it with `nix flake update iets`. It needs
+[numtide/iets#354](https://github.com/numtide/iets/pull/354) (auto-call an attribute set with `__functor`, what
+`callPackage` returns, as Nix does; without it, eval-jobs skips e.g. `androidenv.composeAndroidPackages`) and
+[numtide/iets#355](https://github.com/numtide/iets/pull/355) (an intermittent abort at exit, `RefCell already borrowed`, which fails a report), both merged.
 
 ## Development
 
