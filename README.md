@@ -85,6 +85,22 @@ their paths in the tree (`hello.passthru.tests.version`):
 - The Home Assistant component tests are skipped (`skip` in `eval/tests.nix`): each of the ~1,200 components lists all
   of them, so walking them made 1.4M test jobs instead of 10.6k. Each is still a test of `home-assistant`, as
   `home-assistant.passthru.tests.components.<component>`.
+- `lib.nix`'s `mkReport` takes `skipTests`, more of the tree whose tests not to walk, for a caller that needs only some
+  tests.
+  - The nixos-cuda GPU-checks jobset uses it to skip `dotnetCorePackages` and `azure-cli-extensions`, which have no GPU
+    checks.
+  - Their tests were the most memory-hungry: for Nixpkgs ae2b13d55ef7 (x86_64-linux, with CUDA), skipping them took a
+    report with tests from 31.1 GB and 25.5 s to 22.4 GB and 18.9 s.
+
+A report can't free what it has evaluated (iets can't), so its memory only grows. `mkReport`'s `workers` and
+`maxMemorySize` bound it:
+
+- By default, `workers` 8 and `maxMemorySize` 0: 8 threads of one process, with no limit.
+- With a limit, `workers` processes, each replaced once over `maxMemorySize` MB, so the peak is about their product.
+- Each process evaluates what the jobs share again, so it takes longer. For that report with tests, on 20
+  aarch64-linux cores:
+  - 4 processes of 4096 MB took 39.9 s with a peak of 16.4 GB, against 25.5 s and 31.1 GB with 8 threads;
+  - 8 processes of 4096 MB (nix-eval-jobs' default) saved nothing: 31.1 GB.
 
 Nixpkgs' CI evaluates packages but not their tests, so tests that fail to evaluate aren't rare; they're errors like any
 other.

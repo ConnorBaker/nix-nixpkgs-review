@@ -16,6 +16,8 @@
   withCUDA,
   # Whether `jobs` has the tree's tests: its `passthru.tests` and GPU checks (see ./tests.nix).
   tests,
+  # With `tests`: the packages whose tests not to walk, as ./tests.nix's `skip` (and added to it).
+  skipTests ? { },
   # Whether to recurse into every attribute set, not just those with `recurseForDerivations`.
   forceRecurse,
 }:
@@ -60,7 +62,7 @@ in
     recurseForDerivations = true;
     packages = if builtins.isAttrs root then root // { recurseForDerivations = true; } else root;
   }
-  // (if tests then import ./tests.nix { inherit forceRecurse; } root else { });
+  // (if tests then import ./tests.nix { inherit forceRecurse skipTests; } root else { });
 
   # A job, by its attribute path in `root`, as eval-jobs reached it: it auto-calls every value it walks, with no
   # arguments.

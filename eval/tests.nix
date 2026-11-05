@@ -9,6 +9,8 @@
 {
   # Whether to recurse into every attribute set of the tree, not just those with `recurseForDerivations`.
   forceRecurse,
+  # More of the tree not to walk, as `skip` below (and added to it), e.g. `{ dotnetCorePackages = true; }`.
+  skipTests ? { },
 }:
 let
   inherit (builtins) isAttrs mapAttrs;
@@ -18,9 +20,17 @@ let
   # from being a whole package set, so the walk must be bounded.
   maxDepth = 3;
 
+  # Two `skip` trees as one: a path either skips is skipped.
+  mergeSkip =
+    a: b:
+    if a == true || b == true then
+      true
+    else
+      a // mapAttrs (name: value: if a ? ${name} then mergeSkip a.${name} value else value) b;
+
   # What isn't walked, nested like the tree, with `true` for each attribute path to skip and everything below it. The
-  # same tests reachable through several attribute paths need an entry for each.
-  skip = {
+  # same tests reachable through several attribute paths need an entry for each. `skipTests` is added to it.
+  skip = mergeSkip skipTests {
     # Each of these ~1,200 packages is a Home Assistant component's tests, and lists all of them in its
     # `passthru.tests`, as does `home-assistant`: walking them made 1.4M test jobs instead of 10.6k (Nixpkgs
     # e58dcdca81f2, aarch64-linux). Each is still a test of `home-assistant`, as

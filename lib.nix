@@ -39,9 +39,20 @@ let
       withCUDA ? false,
       # Whether to evaluate the tests too: `passthru.tests` and GPU checks (see eval/tests.nix).
       tests ? false,
+      # With `tests`: the packages whose tests not to walk, nested like the tree, with `true` for each attribute path to
+      # skip and everything below it, e.g. `{ dotnetCorePackages = true; }` (added to eval/tests.nix's own `skip`).
+      skipTests ? { },
       # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (not for Nixpkgs,
       # where `pkgs.pkgs` is `pkgs`).
       forceRecurse ? false,
+      # How eval-jobs evaluates: `workers` threads of one process with no memory limit (`maxMemorySize` 0), or
+      # `workers` processes, each replaced once its memory goes above `maxMemorySize` MB. iets can't free what a process
+      # has evaluated, so a limit is the only way to bound a report's memory; its peak is then about `workers` times
+      # `maxMemorySize`, and each process evaluates what the jobs share again, so it takes longer. For a Nixpkgs report
+      # with tests (evalSystem x86_64-linux, with CUDA, on 20 aarch64-linux cores): 8 threads took 25.5 s with a peak of
+      # 31.1 GB; 4 processes of 4096 MB 39.9 s and 16.4 GB; 2 of 4096 MB 66.3 s and 8.2 GB.
+      workers ? 8,
+      maxMemorySize ? 0,
     }:
     let
       settings = {
@@ -63,11 +74,14 @@ let
           withCA
           withCUDA
           ;
-      };
+      }
+      # Only when given, so that reports without it are the same derivations as before it existed.
+      // lib.optionalAttrs (skipTests != { }) { inherit skipTests; };
     in
     assert lib.assertMsg (
       !(forceRecurse && settings.file == null)
     ) "forceRecurse is for a file: Nixpkgs (e.g. `pkgs.pkgs`) would never finish";
+    assert lib.assertMsg (skipTests == { } || tests) "skipTests is for a report with tests";
     runCommand "report-${label}"
       {
         __structuredAttrs = true;
@@ -78,11 +92,13 @@ let
       }
       # --impure: the tree and eval/ are store paths, which pure evaluation may not import.
       # --no-instantiate: compute the derivations' paths without writing them to a store (there is none).
-      # --max-memory-size 0: one process, whose workers are threads sharing the evaluation, with no memory limit,
-      # rather than worker processes that each evaluate the tree again and restart at the limit.
-      # --workers 8: for a Nixpkgs packages report (aarch64-linux, 10 fast and 10 slow cores, a loaded machine), 4
-      # workers took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and 0.3-0.5 GB more
-      # memory. iets' own measurements (docs/explanation/evaluation.md, "Scaling limits") stop improving at about 6.
+      # --max-memory-size 0 (the default `maxMemorySize`): one process, whose workers are threads sharing the
+      # evaluation, with no memory limit, rather than worker processes that each evaluate the tree again and restart at
+      # the limit.
+      # --workers 8 (the default `workers`): for a Nixpkgs packages report (aarch64-linux, 10 fast and 10 slow cores, a
+      # loaded machine), 4 workers took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and
+      # 0.3-0.5 GB more memory. iets' own measurements (docs/explanation/evaluation.md, "Scaling limits") stop
+      # improving at about 6.
       # env --ignore-environment: Nixpkgs reads the environment (e.g. drbd's `builtins.getEnv "SHELL"`), which in a
       # build is the builder's stdenv's, so without it a report would depend on the caller's Nixpkgs, not just on the
       # tree.
@@ -97,8 +113,8 @@ let
           ${iets}/bin/iets eval-jobs \
           --impure \
           --no-instantiate \
-          --max-memory-size 0 \
-          --workers 8 \
+          --max-memory-size ${toString maxMemorySize} \
+          --workers ${toString workers} \
           ${lib.optionalString forceRecurse "--force-recurse"} \
           --apply '
             drv: {
