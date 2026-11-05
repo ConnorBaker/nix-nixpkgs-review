@@ -39,8 +39,6 @@ let
       # Whether to recurse into every attribute set, not just those with `recurseForDerivations` (not for Nixpkgs,
       # where `pkgs.pkgs` is `pkgs`).
       forceRecurse ? false,
-      # A derivation to build first (e.g. the previous report, so that reports are built one at a time).
-      after ? null,
     }:
     let
       settings = {
@@ -68,16 +66,13 @@ let
       !(forceRecurse && settings.file == null)
     ) "forceRecurse is for a file: Nixpkgs (e.g. `pkgs.pkgs`) would never finish";
     runCommand "report-${label}"
-      (
-        {
-          __structuredAttrs = true;
-          strictDeps = true;
-          nativeBuildInputs = [ jq ];
-          inherit settings;
-          passthru = { inherit label settings; };
-        }
-        // lib.optionalAttrs (after != null) { inherit after; }
-      )
+      {
+        __structuredAttrs = true;
+        strictDeps = true;
+        nativeBuildInputs = [ jq ];
+        inherit settings;
+        passthru = { inherit label settings; };
+      }
       # --impure: the tree and eval/ are store paths, which pure evaluation may not import.
       # --no-instantiate: compute the derivations' paths without writing them to a store (there is none).
       # --max-memory-size 0: one process, whose workers are threads sharing the evaluation, with no memory limit,
@@ -126,8 +121,10 @@ let
     {
       pre,
       post,
-      # A derivation to build first (as for mkReport).
-      after ? null,
+      # Derivations to build first. For a caller that reads the result during evaluation (import-from-derivation):
+      # every report it reads, so that the first diff it reads has them all built at once, in parallel, rather than
+      # each read waiting for its own.
+      after ? [ ],
     }:
     runCommand "jobs-${pre.label}-${post.label}"
       (
@@ -138,7 +135,7 @@ let
           inherit pre post;
           inherit (post) settings;
         }
-        // lib.optionalAttrs (after != null) { inherit after; }
+        // lib.optionalAttrs (after != [ ]) { inherit after; }
       )
       ''
         mkdir "$out"
