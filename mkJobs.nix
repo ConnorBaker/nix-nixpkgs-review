@@ -48,7 +48,7 @@ runCommand name
   }
   ''
     mkdir "$out"
-    jq --compact-output '.added + .changed + (.fixed // []) | sort' ${diff} > "$out/changed.json"
+    jq --compact-output '.added + .changed + .fixed | sort' ${diff} > "$out/changed.json"
     cp ${diff} "$out/diff.json"
     printf '%s' "$root" > "$out/root.nix"
     printf '%s' "$jobs" > "$out/default.nix"

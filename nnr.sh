@@ -100,7 +100,7 @@ set_request .repo "$(jsonString "$repo")"
 set_request .base "$(jsonString "$base")"
 echo "nnr: comparing ${base:0:12} with $headLabel" >&2
 
-# --max-jobs 1: each report evaluates on every core and takes tens of GB of memory, so build them one at a time.
+# --max-jobs 1: each report evaluates on 8 workers and takes ~20 GB of memory, so build them one at a time.
 jobs=$(
   nix build --impure --no-link --print-out-paths --max-jobs 1 \
     --expr '
@@ -115,7 +115,7 @@ jobs=$(
 )
 
 jq --raw-output '
-  "nnr: \(.added + .changed + (.fixed // []) | length) added or changed"
-  + (if (.broken // []) != [] then ", \(.broken | length) broken (no longer evaluate): \(.broken | map(join(".")) | .[:10] | join(" "))\(if (.broken | length) > 10 then " ..." else "" end)" else "" end)
+  "nnr: \(.added + .changed + .fixed | length) added or changed"
+  + (if .broken != [] then ", \(.broken | length) broken (no longer evaluate): \(.broken | map(join(".")) | .[:10] | join(" "))\(if (.broken | length) > 10 then " ..." else "" end)" else "" end)
 ' "$jobs/diff.json" >&2
 echo "$jobs"

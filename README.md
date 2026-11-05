@@ -55,7 +55,7 @@ attribute, calling a function with an argument it doesn't take, `abort`), is onl
 evaluates packages but not their tests, so tests that fail to evaluate aren't rare; they're errors in the report like
 any other. Only a fatal error (e.g. a stack overflow) fails a report.
 
-For Nixpkgs e58dcdca81f2 (aarch64-linux, 20 cores, on a busy machine):
+For Nixpkgs e58dcdca81f2 (aarch64-linux, 20 cores, on a busy machine; measured with 20 workers, before reports used 8):
 
 | Report | Jobs | Errors | eval-jobs | Peak memory |
 |---|---|---|---|---|
@@ -74,8 +74,7 @@ reports (their packages reports, and their tests reports if given):
   "changed": [["python3Packages", "torch"]],
   "removed": [],
   "broken": [["cowsay"]],
-  "fixed": [],
-  "testsCompared": true
+  "fixed": []
 }
 ```
 
@@ -127,7 +126,7 @@ diff = pkgs.callPackage "${nixNixpkgsReview}/mkDiff.nix" {
 changed = let d = lib.importJSON diff; in d.added ++ d.changed ++ d.fixed;
 ```
 
-(`iets` is used as `${iets}/bin/iets`, through `nativeBuildInputs`; `evalNix.outPath` is enough.)
+(`iets` is used only as `${iets}/bin/iets`, so `evalNix.outPath` is enough.)
 
 ### `mkReport.nix`'s arguments
 
@@ -152,7 +151,8 @@ Things to keep in mind:
 
 - **Reports are built locally.** nix-eval-jobs builds import-from-derivation on the evaluating machine, so a Hydra
   host needs the memory for a report on top of its evaluator workers.
-- **Build reports one after another.** Each one uses every core, so building several at once only adds memory. The
+- **Build reports one after another.** Each one evaluates on 8 workers and takes ~20 GB, so building several at once
+  mostly adds memory. The
   jobset chains them by giving each report an `after` attribute referring to the previous one.
 - **Nothing is freed.** iets never frees memory during an evaluation; the evaluated package set stays reachable until
   the end anyway.
@@ -216,7 +216,7 @@ How:
 - **Reuse:** a report's derivation depends only on its tree and the settings (it's named after the commit, e.g.
   `report-packages-e58dcdca81f2`), so a commit's reports are built once and reused by every comparison with it, until
   garbage-collected.
-- **Memory:** each report evaluates on every core and takes ~20 GB for Nixpkgs, so `nnr` builds with `--max-jobs 1`.
+- **Memory:** each report evaluates on 8 workers and takes ~20 GB for Nixpkgs, so `nnr` builds with `--max-jobs 1`.
 - **Tests:** with `--tests`, it also compares `passthru.tests`. For Nixpkgs e58dcdca81f2 against two commits before
   (aarch64-linux), that's 28,199 jobs instead of 22,330.
 - **Limitations:** reports evaluate in a sandbox, without a store, so an entry point that fetches anything (e.g.

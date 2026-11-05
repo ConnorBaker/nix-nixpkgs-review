@@ -33,7 +33,6 @@
   iets,
   jq,
   lib,
-  pkgsBuildHost,
   runCommand,
 }:
 assert lib.assertMsg (builtins.elem reportKind [
@@ -45,11 +44,6 @@ assert lib.assertMsg (
 ) "mkReport.nix: forceRecurse is for a `file`: Nixpkgs (e.g. `pkgs.pkgs`) would never finish";
 let
   # What the report evaluates (shared with mkJobs.nix, through passthru.root).
-  # NOTE: Using `--impure` allows us to read in the Nix expressions as bind-mounted in the store, without copying them
-  # to a temporary store.
-  # Because of Nix's path semantics, ./configs and ./overlays create top-level store path entries with the contents
-  # of those directories. As such, references within the directory are fine, but references which escape the directory
-  # are not going to work.
   root = import ./rootExpr.nix {
     inherit
       args
@@ -83,7 +77,8 @@ in
 # The output paths are real ones, so reports of the same tree are the same whatever iets made them.
 #
 # eval-jobs evaluates each attribute on its own, so any error (not just what `tryEval` catches) is only that
-# attribute's, and a tests report evaluates whatever its tests do. A fatal error (e.g. a stack overflow) fails the build.
+# attribute's, and a tests report evaluates whatever its tests do. A fatal error (e.g. a stack overflow) makes eval-jobs
+# exit 1, which fails the build.
 #
 # NOTE: iets never frees memory, and the evaluated package set stays reachable until the end anyway; a Nixpkgs packages
 # report peaks at ~19 GB (aarch64-linux, without CUDA).
@@ -92,13 +87,9 @@ runCommand name
     __structuredAttrs = true;
     strictDeps = true;
 
-    nativeBuildInputs = [
-      iets
-      jq
-    ];
+    nativeBuildInputs = [ jq ];
 
     inherit expr;
-    forceRecurseFlag = lib.optionals (forceRecurse && reportKind == "packages") [ "--force-recurse" ];
 
     passthru = {
       inherit
@@ -116,30 +107,29 @@ runCommand name
         ;
     };
   }
+  # --impure: the tree and these files are store paths, which pure evaluation may not import.
   # --no-instantiate: compute the derivations' paths without writing them to a store (reports have none).
   # --max-memory-size 0: one process (its workers are threads sharing the evaluation) with no memory limit, rather than
   # worker processes that each evaluate the tree again and restart at the limit.
-  # --workers: every core (iets' default is at most 4).
+  # --workers 8: for a Nixpkgs packages report (aarch64-linux, 10 fast and 10 slow cores, a loaded machine), 4 workers
+  # took 21-25 s, 8 took 17-18 s, and 20 took 14-17 s for 10-20 % more CPU time and 0.3-0.5 GB more memory. iets' own
+  # measurements (docs/explanation/evaluation.md, "Scaling limits") stop improving at about 6.
+  # --force-recurse: for a packages report only; testsRoot.nix does its own.
   # env --ignore-environment: Nixpkgs reads the environment (e.g. drbd's `builtins.getEnv "SHELL"`), which in a build is
   # the builder's stdenv's, so without it a report would depend on this flake's nixpkgs, not just on the tree.
   # IETS_PROGRESS=0: no progress lines, so the log doesn't depend on timing.
+  # eval-jobs ends its log with the counts of jobs and errors, the time taken and the peak memory.
   ''
     nixLog "running eval-jobs"
-    ${lib.getExe pkgsBuildHost.time} --verbose \
-      env --ignore-environment HOME="$HOME" TMPDIR="$TMPDIR" IETS_PROGRESS=0 \
+    env --ignore-environment HOME="$HOME" TMPDIR="$TMPDIR" IETS_PROGRESS=0 \
       ${iets}/bin/iets eval-jobs \
       --impure \
       --no-instantiate \
       --max-memory-size 0 \
-      --workers "$(nproc)" \
-      "''${forceRecurseFlag[@]}" \
+      --workers 8 \
+      ${lib.optionalString (forceRecurse && reportKind == "packages") "--force-recurse"} \
       --expr "$expr" \
       > jobs.jsonl
-
-    if fatal=$(jq --raw-output 'select(.fatal == true) | .attrPath | join(".")' jobs.jsonl) && [[ -n $fatal ]]; then
-      nixErrorLog "eval-jobs had fatal errors at: $fatal"
-      exit 1
-    fi
 
     jq --compact-output '
       if .error then
@@ -149,6 +139,4 @@ runCommand name
       end
     ' jobs.jsonl \
       | LC_ALL=C sort > "$out"
-
-    nixLog "$(jq --slurp 'map(select(.outputs)) | length' "$out") jobs, $(jq --slurp 'map(select(.error)) | length' "$out") errors"
   ''

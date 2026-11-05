@@ -14,9 +14,8 @@
   runCommand,
 }:
 # The attribute paths (e.g. [ "python3Packages" "torch" ] or [ "hello" "passthru" "tests" "version" ]) of the derivations
-# added, changed, removed, broken and fixed between two trees (see ./diff.jq), each sorted, and whether tests were
-# compared:
-# { added = [ ... ]; changed = [ ... ]; removed = [ ... ]; broken = [ ... ]; fixed = [ ... ]; testsCompared = <bool>; }.
+# added, changed, removed, broken and fixed between two trees (see ./diff.jq), each sorted:
+# { added = [ ... ]; changed = [ ... ]; removed = [ ... ]; broken = [ ... ]; fixed = [ ... ]; }.
 #
 # A tree's tests report is compared along with its packages report: a test's attribute path is its path in the tree,
 # so tests are diffed like any other derivation.
@@ -30,10 +29,8 @@ runCommand name
 
     nativeBuildInputs = [ jq ];
 
-    reportsPre = map toString ([ reportPre ] ++ lib.optional (testsPre != null) testsPre);
-    reportsPost = map toString ([ reportPost ] ++ lib.optional (testsPost != null) testsPost);
-    # As JSON: with structured attributes, `false` would be an empty string.
-    testsCompared = builtins.toJSON (testsPre != null);
+    reportsPre = [ reportPre ] ++ lib.optional (testsPre != null) testsPre;
+    reportsPost = [ reportPost ] ++ lib.optional (testsPost != null) testsPost;
 
     passthru = {
       inherit
@@ -50,7 +47,6 @@ runCommand name
       --null-input \
       --slurpfile pre <(cat "''${reportsPre[@]}") \
       --slurpfile post <(cat "''${reportsPost[@]}") \
-      --argjson testsCompared "$testsCompared" \
       --from-file ${./diff.jq} \
       > "$out"
   ''

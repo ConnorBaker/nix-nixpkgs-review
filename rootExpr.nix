@@ -22,6 +22,7 @@
               system = "${evalSystem}";
             }
             // ${
+              # Each of these is copied to the store on its own, so it can't refer to files outside it.
               if nixpkgsArgs != null then
                 "import ${nixpkgsArgs}"
               else

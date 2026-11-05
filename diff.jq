@@ -1,6 +1,6 @@
 # The diff of two trees' reports (see mkReport.nix), as mkDiff.nix's output. Run with --null-input,
 # --slurpfile pre / --slurpfile post: each the lines of one tree's reports (its packages report, and its tests report if
-# any), whose attribute paths don't overlap; and --argjson testsCompared: whether there were tests reports.
+# any), whose attribute paths don't overlap.
 #
 # Yields the attribute paths, each sorted, of the derivations
 #   added:   that are jobs in post and weren't there in pre;
@@ -38,6 +38,5 @@ def index: map({key: (.attrPath | tojson), value: .}) | from_entries;
     changed: (map(.changed // empty) | sort),
     removed: (map(.removed // empty) | sort),
     broken: (map(.broken // empty) | sort),
-    fixed: (map(.fixed // empty) | sort),
-    $testsCompared
+    fixed: (map(.fixed // empty) | sort)
   }
