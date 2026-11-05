@@ -34,6 +34,7 @@ let
   mkReport =
     rev:
     nnr.mkReport {
+      label = if rev == null then "working-tree" else builtins.substring 0 12 rev;
       tree = builtins.fetchGit ({ url = repo; } // lib.optionalAttrs (rev != null) { inherit rev; });
       attrPath = if attr == null then [ ] else lib.splitString "." attr;
       inherit
