@@ -1,5 +1,6 @@
 # The diff of two trees' reports (see lib.nix). Run with --null-input and --slurpfile pre / --slurpfile post, each the
-# lines of one tree's report.
+# lines of one tree's report, or only those the other doesn't have: a line both have (the same attribute path, with the
+# same outputs or error) adds nothing.
 #
 # Yields the attribute paths, each sorted, of the derivations
 #   added:   that are jobs in post and weren't there in pre;
